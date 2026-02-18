@@ -666,6 +666,19 @@ def render_deep_analysis_page():
     # ── Section 1: Composite Career Prospect Score ────────────
     st.markdown('<div id="deep-score"></div>', unsafe_allow_html=True)
     st.header("Career Prospect Score")
+    st.markdown(
+        '<div class="yf-card" style="background:linear-gradient(135deg,#EEF2FF,#F5F3FF);border-color:#E0E7FF">'
+        "<b>综合职业前景评分（0–100 分）</b><br>"
+        "将五个维度的指标加权合成一个综合得分，帮助你快速了解所选专业的整体就业前景：<br>"
+        "• <b>就业率 (25%)</b> — 你的专业在所有专业中的就业率百分位排名<br>"
+        "• <b>收入水平 (25%)</b> — 你的专业中位收入在所有专业中的百分位排名<br>"
+        "• <b>趋势 (20%)</b> — 失业率的线性回归斜率，下降趋势得分更高<br>"
+        "• <b>需求 (15%)</b> — 对比近期与早期的平均职位空缺数，增长则得分高<br>"
+        "• <b>成长 (15%)</b> — 毕业 2 年到 5 年的收入增长率，以 0–50% 映射至 0–100 分<br>"
+        "等级：A (80+)、B (65–79)、C (50–64)、D (35–49)、F (&lt;35)"
+        "</div>",
+        unsafe_allow_html=True,
+    )
     score = results["composite_score"]
     col1, col2 = st.columns([1, 1])
     with col1:
@@ -684,6 +697,19 @@ def render_deep_analysis_page():
     # ── Section 2: Career Quadrant ────────────────────────────
     st.markdown('<div id="deep-quadrant"></div>', unsafe_allow_html=True)
     st.header("Career Quadrant — Employability vs Income")
+    st.markdown(
+        '<div class="yf-card" style="background:linear-gradient(135deg,#EEF2FF,#F5F3FF);border-color:#E0E7FF">'
+        "<b>职业象限图 — 就业率 vs 收入</b><br>"
+        "将所有专业大类同时放在两个维度上比较：<br>"
+        "• <b>横轴（就业率）</b> — 代表找到工作的难易程度，越靠右越容易就业<br>"
+        "• <b>纵轴（中位收入）</b> — 代表薪资水平，越靠上收入越高<br>"
+        "虚线为所有专业的中位数分界线，将图表分为四个象限：<br>"
+        "　右上 = 高就业 + 高收入（最优） · 左上 = 低就业 + 高收入（精英路线）<br>"
+        "　右下 = 高就业 + 低收入（容易就业但收入有限） · 左下 = 双低（需慎重考虑）<br>"
+        "红色星标为你所选的专业。"
+        "</div>",
+        unsafe_allow_html=True,
+    )
     quadrant = results["career_quadrant"]
     if "error" not in quadrant:
         st.plotly_chart(career_quadrant_chart(quadrant), use_container_width=True)
@@ -713,6 +739,17 @@ def render_deep_analysis_page():
     if "error" not in sf_quad:
         sf_broad = sf_quad.get("broad_field", broad_field)
         st.header(f"Within-Field Comparison — {sf_broad}")
+        st.markdown(
+            '<div class="yf-card" style="background:linear-gradient(135deg,#EEF2FF,#F5F3FF);border-color:#E0E7FF">'
+            "<b>同领域内部子专业对比</b><br>"
+            "在你所属的大类（CIP 前两位相同）内，将各子专业放在就业率 × 收入象限图中比较。"
+            "帮助你了解同领域内哪些细分方向更有优势。<br>"
+            "• 圆形实心标记 = 该子专业有精确的就业率和收入数据<br>"
+            "• 菱形标记 = 就业率为从上级 CIP 分类继承的估算值<br>"
+            "• 红色星标 = 你所选的子专业"
+            "</div>",
+            unsafe_allow_html=True,
+        )
         st.plotly_chart(subfield_quadrant_chart(sf_quad), use_container_width=True)
 
         sf_uq = sf_quad.get("user_quadrant", "N/A")
@@ -745,6 +782,17 @@ def render_deep_analysis_page():
     # ── Section 3: Trend Forecasts ────────────────────────────
     st.markdown('<div id="deep-forecast"></div>', unsafe_allow_html=True)
     st.header("Trend Forecasts")
+    st.markdown(
+        '<div class="yf-card" style="background:linear-gradient(135deg,#EEF2FF,#F5F3FF);border-color:#E0E7FF">'
+        "<b>趋势分析与 3 年预测</b><br>"
+        "使用线性回归模型，对历史数据进行平滑处理后外推未来趋势：<br>"
+        "• <b>失业率预测（左图）</b> — 基于最近 36 个年度数据点，先做 3 期移动平均平滑，"
+        "再用一次线性回归拟合，外推 3 年。阴影区域为 ±1 个标准差的置信区间（约 68% 覆盖）<br>"
+        "• <b>职位空缺预测（右图）</b> — 基于最近 20 个季度数据点，同样算法，外推 3 个季度<br>"
+        "斜率判定：失业率斜率 &lt; -0.1 = 改善中 · &gt; +0.1 = 恶化中 · 其他 = 稳定"
+        "</div>",
+        unsafe_allow_html=True,
+    )
 
     unemp_fc = results["unemployment_forecast"]
     vac_fc = results["vacancy_forecast"]
@@ -764,6 +812,18 @@ def render_deep_analysis_page():
     # ── Section 3: Income Growth Projection ───────────────────
     st.markdown('<div id="deep-income"></div>', unsafe_allow_html=True)
     st.header("Income Growth Projection")
+    st.markdown(
+        '<div class="yf-card" style="background:linear-gradient(135deg,#EEF2FF,#F5F3FF);border-color:#E0E7FF">'
+        "<b>收入增长预测</b><br>"
+        "使用对数增长模型预测毕业后的长期收入走势：<br>"
+        "• 模型公式：<code>收入 = a × ln(年数) + b</code><br>"
+        "• 用毕业 2 年和 5 年的实际收入数据拟合曲线<br>"
+        "• 向前预测到毕业后第 10 年和第 15 年<br>"
+        "• 对数模型反映了收入早期增长快、后期趋缓的经验规律<br>"
+        "红色圆点 = 实际数据 · 紫色菱形 = 预测值 · 虚线 = 全专业平均水平"
+        "</div>",
+        unsafe_allow_html=True,
+    )
     proj = results["income_projection"]
     if "error" not in proj:
         st.plotly_chart(income_projection_chart(proj), use_container_width=True)
@@ -791,6 +851,19 @@ def render_deep_analysis_page():
     # ── Section 4: Risk Assessment ────────────────────────────
     st.markdown('<div id="deep-risk"></div>', unsafe_allow_html=True)
     st.header("Career Stability & Risk Assessment")
+    st.markdown(
+        '<div class="yf-card" style="background:linear-gradient(135deg,#EEF2FF,#F5F3FF);border-color:#E0E7FF">'
+        "<b>职业稳定性与风险评估</b><br>"
+        "从两个维度评估职业的稳定程度：<br>"
+        "• <b>失业率波动性（CV%）</b> — 失业率时间序列的变异系数（标准差÷均值×100）。"
+        "CV 越低越稳定：&lt;10% = A · 10-19% = B · 20-29% = C · 30-39% = D · ≥40% = F<br>"
+        "• <b>收入对称比</b> — 中位收入 ÷ 平均收入。比值越接近 1.0 说明收入分布越均匀；"
+        "远低于 1.0 说明少数人拉高了平均值（收入不平等）。"
+        "≥0.95 = A · 0.85-0.94 = B · 0.75-0.84 = C · 0.65-0.74 = D · &lt;0.65 = F<br>"
+        "• <b>综合等级</b> — 两个维度等级的加权平均（A=4, B=3, C=2, D=1, F=0）"
+        "</div>",
+        unsafe_allow_html=True,
+    )
     risk = results["risk_assessment"]
     st.plotly_chart(risk_assessment_chart(risk), use_container_width=True)
 
@@ -806,6 +879,20 @@ def render_deep_analysis_page():
     # ── Section 5: Education ROI ──────────────────────────────
     st.markdown('<div id="deep-roi"></div>', unsafe_allow_html=True)
     st.header("Education ROI Analysis")
+    st.markdown(
+        '<div class="yf-card" style="background:linear-gradient(135deg,#EEF2FF,#F5F3FF);border-color:#E0E7FF">'
+        "<b>教育投资回报率分析</b><br>"
+        "对比不同学历层级之间的收入提升与教育成本：<br>"
+        "• <b>收入溢价</b> — 升学后中位年收入的增加额及百分比<br>"
+        "• <b>教育成本</b> — 按加拿大平均水平估算（学费 + 生活费）：<br>"
+        "　高中 $0 · 学徒/技工 $8k×2yr · 大专/CEGEP $12k×2yr<br>"
+        "　学士 $22k×4yr · 硕士 $25k×2yr · 博士 $28k×4yr<br>"
+        "• <b>回本年数</b> — 教育总成本 ÷ 年收入增加额（越短越划算）<br>"
+        "左图（瀑布图）展示逐级的收入增幅变化；右图展示各级的回本时间线。<br>"
+        "<i>注：未考虑在读期间的机会成本、通货膨胀和货币时间价值。</i>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
     roi = results["education_roi"]
     if "error" not in roi:
         col1, col2 = st.columns(2)
@@ -842,6 +929,18 @@ def render_deep_analysis_page():
     # ── Section 6: Field Competitiveness ──────────────────────
     st.markdown('<div id="deep-compete"></div>', unsafe_allow_html=True)
     st.header("Field Competitiveness")
+    st.markdown(
+        '<div class="yf-card" style="background:linear-gradient(135deg,#EEF2FF,#F5F3FF);border-color:#E0E7FF">'
+        "<b>专业竞争力排名</b><br>"
+        "将你的专业大类在就业率和收入两个维度上与所有 11 个大类进行排名：<br>"
+        "• <b>就业率排名</b> — 按就业率降序排列，第 1 名最高<br>"
+        "• <b>收入排名</b> — 按中位收入降序排列，第 1 名最高<br>"
+        "• <b>综合排名</b> — 就业排名 + 收入排名之和（越小越好）<br>"
+        "• <b>四分位分析</b> — 前 25% = 优势 · 后 25% = 劣势<br>"
+        "展开「Full Field Rankings」可查看所有专业的完整排名。"
+        "</div>",
+        unsafe_allow_html=True,
+    )
     compete = results["field_competitiveness"]
     if "error" not in compete:
         col1, col2, col3 = st.columns(3)
