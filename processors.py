@@ -9,6 +9,12 @@ from config import (
     UNEMP_GEO, UNEMP_INDICATOR, UNEMP_EDU,
     JOB_VAC_GEO, JOB_VAC_CHAR, JOB_VAC_STAT,
     GRAD_GEO, GRAD_FIELDS, GRAD_STATS,
+    GRAD_CIP_GEO, GRAD_CIP_QUAL, GRAD_CIP_STATS,
+    GRAD_CIP_BROAD_FIELDS, GRAD_CIP_SUBFIELDS, CIP_PREFIX_TO_GRAD_CIP,
+    NOC_DIST_CIP_FIELDS, NOC_DIST_CIP_SUBFIELDS,
+    NOC_BROAD_CATEGORIES, NOC_SUBMAJOR_GROUPS, NOC_DIST_STATS, NOC_DIST_EDU,
+    NOC_2DIGIT_TO_5DIGIT, NOC_5DIGIT_NAMES,
+    NOC_INCOME_AGE, NOC_INCOME_STATS as NOC_INC_STATS,
     FIELD_OPTIONS, EDUCATION_OPTIONS,
 )
 from data_client import StatCanClient
@@ -445,3 +451,436 @@ def fetch_subfield_comparison(field_name: str, subfield_name: str | None, educat
         "broad_emp_rate": round(broad_emp_rate, 1) if broad_emp_rate else None,
         "user_subfield": subfield_name,
     }
+
+
+# ─── CIP Employment Distribution (table 37100280) ────────────────────
+
+
+def _resolve_cip_to_grad_member(cip_code: str | None, broad_field: str) -> tuple[int, str]:
+    """Resolve a 6-digit CIP code to the closest member ID in table 37100280.
+
+    Returns (member_id, display_name).
+    """
+    if cip_code:
+        prefix = cip_code.split(".")[0]
+        if prefix in CIP_PREFIX_TO_GRAD_CIP:
+            member_id = CIP_PREFIX_TO_GRAD_CIP[prefix]
+            # Find display name
+            for name, mid in GRAD_CIP_SUBFIELDS.items():
+                if mid == member_id:
+                    return member_id, name
+            return member_id, f"CIP {prefix}"
+
+    # Fall back to broad field
+    member_id = GRAD_CIP_BROAD_FIELDS.get(broad_field, 1)
+    return member_id, broad_field
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_cip_employment_distribution(
+    cip_code: str | None,
+    broad_field: str,
+    education: str,
+    geo: str,
+) -> dict:
+    """Fetch 2yr and 5yr median income for the user's CIP and all broad CIP fields.
+
+    Uses table 37-10-0280-01 (CIP alternative primary groupings).
+    Returns data for a grouped bar chart comparing fields.
+    """
+    from data_client import get_client
+    client = get_client()
+    pid = TABLES["graduate_outcomes_cip"]
+
+    geo_id = GRAD_CIP_GEO.get(geo, GRAD_CIP_GEO.get("Canada", 1))
+    qual_id = EDUCATION_OPTIONS.get(education, {}).get("grad", 1)
+    # Map education options to GRAD_CIP_QUAL keys
+    qual_map = {
+        "Bachelor's degree": 7,
+        "Master's degree": 11,
+        "Earned doctorate": 12,
+        "College, CEGEP or other non-university certificate or diploma": 4,
+        "Apprenticeship or trades certificate or diploma": 3,
+        "High school diploma": 1,  # Use total as fallback
+        "Degree in medicine, dentistry, veterinary medicine or optometry": 9,
+        "University degree (any)": 7,
+    }
+    qual_id = qual_map.get(education, 1)
+
+    stat_2yr = GRAD_CIP_STATS["Median income 2yr after graduation"]
+    stat_5yr = GRAD_CIP_STATS["Median income 5yr after graduation"]
+    stat_count = GRAD_CIP_STATS["Number of graduates"]
+
+    user_field_id, user_field_name = _resolve_cip_to_grad_member(cip_code, broad_field)
+
+    # Coordinate: geo.qual.field.gender(1).age(1=15-64).status(1=all).char(4=reporting income).stat.0.0
+    def make_coord(field_id, stat_id):
+        return _coord([geo_id, qual_id, field_id, 1, 1, 1, 4, stat_id])
+
+    batch = []
+
+    # User's own CIP field
+    user_2yr_coord = make_coord(user_field_id, stat_2yr)
+    user_5yr_coord = make_coord(user_field_id, stat_5yr)
+    user_count_coord = make_coord(user_field_id, stat_count)
+    batch.append({"productId": pid, "coordinate": user_2yr_coord, "latestN": 1})
+    batch.append({"productId": pid, "coordinate": user_5yr_coord, "latestN": 1})
+    batch.append({"productId": pid, "coordinate": user_count_coord, "latestN": 1})
+
+    # All broad CIP fields for comparison
+    field_coords = {}
+    for fname, fid in GRAD_CIP_BROAD_FIELDS.items():
+        if fname == "Total":
+            continue
+        c2 = make_coord(fid, stat_2yr)
+        c5 = make_coord(fid, stat_5yr)
+        cc = make_coord(fid, stat_count)
+        field_coords[fname] = {"coord_2yr": c2, "coord_5yr": c5, "coord_count": cc}
+        batch.append({"productId": pid, "coordinate": c2, "latestN": 1})
+        batch.append({"productId": pid, "coordinate": c5, "latestN": 1})
+        batch.append({"productId": pid, "coordinate": cc, "latestN": 1})
+
+    # Sub-fields within the user's broad field for detailed view
+    subfield_coords = {}
+    for sf_name, sf_id in GRAD_CIP_SUBFIELDS.items():
+        # Check if this sub-field belongs to the user's broad field
+        # by checking if its parent ID matches
+        broad_id = GRAD_CIP_BROAD_FIELDS.get(broad_field, 0)
+        # Sub-fields are children: their IDs are between broad_id+1 and next broad_id
+        broad_ids_sorted = sorted(GRAD_CIP_BROAD_FIELDS.values())
+        idx = broad_ids_sorted.index(broad_id) if broad_id in broad_ids_sorted else -1
+        if idx >= 0:
+            next_broad = broad_ids_sorted[idx + 1] if idx + 1 < len(broad_ids_sorted) else 999
+            if broad_id < sf_id < next_broad:
+                c2 = make_coord(sf_id, stat_2yr)
+                c5 = make_coord(sf_id, stat_5yr)
+                cc = make_coord(sf_id, stat_count)
+                subfield_coords[sf_name] = {"coord_2yr": c2, "coord_5yr": c5, "coord_count": cc}
+                batch.append({"productId": pid, "coordinate": c2, "latestN": 1})
+                batch.append({"productId": pid, "coordinate": c5, "latestN": 1})
+                batch.append({"productId": pid, "coordinate": cc, "latestN": 1})
+
+    coord_map = client.query_batch(batch)
+
+    # Extract user's data
+    user_summary = {}
+    val2 = _extract_value(coord_map, user_2yr_coord)
+    val5 = _extract_value(coord_map, user_5yr_coord)
+    val_count = _extract_value(coord_map, user_count_coord)
+    if val2 is not None:
+        user_summary["income_2yr"] = round(val2, 0)
+    if val5 is not None:
+        user_summary["income_5yr"] = round(val5, 0)
+    if val_count is not None:
+        user_summary["graduate_count"] = int(val_count)
+    if val2 and val5 and val2 > 0:
+        user_summary["growth_pct"] = round((val5 - val2) / val2 * 100, 1)
+
+    # Extract broad field comparison data
+    broad_comparison = []
+    for fname, coords in field_coords.items():
+        v2 = _extract_value(coord_map, coords["coord_2yr"])
+        v5 = _extract_value(coord_map, coords["coord_5yr"])
+        vc = _extract_value(coord_map, coords["coord_count"])
+        if v2 is not None or v5 is not None:
+            entry = {"field": fname}
+            if v2 is not None:
+                entry["income_2yr"] = round(v2, 0)
+            if v5 is not None:
+                entry["income_5yr"] = round(v5, 0)
+            if vc is not None:
+                entry["graduate_count"] = int(vc)
+            if v2 and v5 and v2 > 0:
+                entry["growth_pct"] = round((v5 - v2) / v2 * 100, 1)
+            broad_comparison.append(entry)
+    broad_comparison.sort(key=lambda x: x.get("income_5yr", 0), reverse=True)
+
+    # Extract sub-field data within user's broad field
+    subfield_comparison = []
+    for sf_name, coords in subfield_coords.items():
+        v2 = _extract_value(coord_map, coords["coord_2yr"])
+        v5 = _extract_value(coord_map, coords["coord_5yr"])
+        vc = _extract_value(coord_map, coords["coord_count"])
+        if v2 is not None or v5 is not None:
+            entry = {"field": sf_name}
+            if v2 is not None:
+                entry["income_2yr"] = round(v2, 0)
+            if v5 is not None:
+                entry["income_5yr"] = round(v5, 0)
+            if vc is not None:
+                entry["graduate_count"] = int(vc)
+            if v2 and v5 and v2 > 0:
+                entry["growth_pct"] = round((v5 - v2) / v2 * 100, 1)
+            subfield_comparison.append(entry)
+    subfield_comparison.sort(key=lambda x: x.get("income_5yr", 0), reverse=True)
+
+    return {
+        "user_summary": user_summary,
+        "user_field_name": user_field_name,
+        "broad_field": broad_field,
+        "broad_comparison": broad_comparison,
+        "subfield_comparison": subfield_comparison,
+    }
+
+
+# ─── CIP → NOC Occupation Distribution (table 98100403) ──────────────
+
+
+def _resolve_cip_to_noc_dist_member(cip_code: str | None, broad_field: str) -> tuple[int, str]:
+    """Resolve a CIP code to the member ID in table 98100403.
+
+    Returns (member_id, display_name).
+    """
+    if cip_code:
+        prefix = cip_code.split(".")[0]
+        if prefix in NOC_DIST_CIP_SUBFIELDS:
+            return NOC_DIST_CIP_SUBFIELDS[prefix], f"CIP {prefix}"
+
+    # Fall back to broad field
+    member_id = NOC_DIST_CIP_FIELDS.get(broad_field, 1)
+    return member_id, broad_field
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_noc_distribution(
+    cip_code: str | None,
+    broad_field: str,
+    education: str,
+) -> dict:
+    """Fetch occupation (NOC) distribution for a given CIP field of study.
+
+    Uses table 98-10-0403-01 (Occupation by major field of study).
+    Returns % distribution across NOC broad categories and sub-major groups.
+    Coordinate: geo(1).age(3=25-64).cip.edu.gender(1).noc.stat.0.0.0
+    """
+    from data_client import get_client
+    client = get_client()
+    pid = TABLES["cip_noc_distribution"]
+
+    edu_id = NOC_DIST_EDU.get(education, NOC_DIST_EDU.get("Total", 1))
+    # Map education option labels to table 98100403 education IDs
+    edu_map = {
+        "Bachelor's degree": 12,
+        "Master's degree": 15,
+        "Earned doctorate": 16,
+        "College, CEGEP or other non-university certificate or diploma": 9,
+        "Apprenticeship or trades certificate or diploma": 6,
+        "High school diploma": 3,
+        "Degree in medicine, dentistry, veterinary medicine or optometry": 14,
+        "University degree (any)": 11,
+    }
+    edu_id = edu_map.get(education, 1)
+
+    cip_id, cip_display = _resolve_cip_to_noc_dist_member(cip_code, broad_field)
+
+    pct_stat = NOC_DIST_STATS["pct_distribution"]
+    count_stat = NOC_DIST_STATS["count"]
+
+    # Coordinate: geo(1).age(3=25-64).cip.edu.gender(1).noc.stat.0.0.0
+    def make_coord(noc_id, stat_id):
+        return _coord([1, 3, cip_id, edu_id, 1, noc_id, stat_id])
+
+    batch = []
+
+    # Query broad NOC categories (1-digit level) — % distribution
+    broad_coords = {}
+    for noc_name, noc_id in NOC_BROAD_CATEGORIES.items():
+        c_pct = make_coord(noc_id, pct_stat)
+        c_cnt = make_coord(noc_id, count_stat)
+        broad_coords[noc_name] = {"pct_coord": c_pct, "count_coord": c_cnt}
+        batch.append({"productId": pid, "coordinate": c_pct, "latestN": 1})
+        batch.append({"productId": pid, "coordinate": c_cnt, "latestN": 1})
+
+    # Query 2-digit NOC sub-major groups — % distribution
+    submajor_coords = {}
+    for noc_name, noc_id in NOC_SUBMAJOR_GROUPS.items():
+        c_pct = make_coord(noc_id, pct_stat)
+        c_cnt = make_coord(noc_id, count_stat)
+        submajor_coords[noc_name] = {"pct_coord": c_pct, "count_coord": c_cnt}
+        batch.append({"productId": pid, "coordinate": c_pct, "latestN": 1})
+        batch.append({"productId": pid, "coordinate": c_cnt, "latestN": 1})
+
+    # Also query "Occupation - not applicable" (member 2)
+    na_pct_coord = make_coord(2, pct_stat)
+    na_cnt_coord = make_coord(2, count_stat)
+    batch.append({"productId": pid, "coordinate": na_pct_coord, "latestN": 1})
+    batch.append({"productId": pid, "coordinate": na_cnt_coord, "latestN": 1})
+
+    coord_map = client.query_batch(batch)
+
+    # Extract broad NOC distribution
+    broad_distribution = []
+    for noc_name, coords in broad_coords.items():
+        pct = _extract_value(coord_map, coords["pct_coord"])
+        cnt = _extract_value(coord_map, coords["count_coord"])
+        if pct is not None and pct > 0:
+            entry = {"noc": noc_name, "percentage": round(pct, 1)}
+            if cnt is not None:
+                entry["count"] = int(cnt)
+            broad_distribution.append(entry)
+    broad_distribution.sort(key=lambda x: x["percentage"], reverse=True)
+
+    # Extract sub-major group distribution
+    submajor_distribution = []
+    for noc_name, coords in submajor_coords.items():
+        pct = _extract_value(coord_map, coords["pct_coord"])
+        cnt = _extract_value(coord_map, coords["count_coord"])
+        if pct is not None and pct > 0.1:  # Filter out very small groups
+            entry = {"noc": noc_name, "percentage": round(pct, 1)}
+            if cnt is not None:
+                entry["count"] = int(cnt)
+            submajor_distribution.append(entry)
+    submajor_distribution.sort(key=lambda x: x["percentage"], reverse=True)
+
+    # "Not applicable" percentage
+    na_pct = _extract_value(coord_map, na_pct_coord)
+    na_cnt = _extract_value(coord_map, na_cnt_coord)
+
+    # ── Second pass: drill down to 5-digit NOC for significant 2-digit groups ──
+    # Find 2-digit groups with > 1% to drill into
+    significant_2digit = []
+    for noc_name, coords in submajor_coords.items():
+        pct = _extract_value(coord_map, coords["pct_coord"])
+        if pct is not None and pct >= 1.0:
+            # Find the member ID of this 2-digit group
+            noc_id = NOC_SUBMAJOR_GROUPS.get(noc_name)
+            if noc_id and noc_id in NOC_2DIGIT_TO_5DIGIT:
+                significant_2digit.append(noc_id)
+
+    detail_batch = []
+    detail_coords = {}  # member_id -> coord
+    for two_digit_id in significant_2digit:
+        for five_digit_id in NOC_2DIGIT_TO_5DIGIT[two_digit_id]:
+            c_pct = make_coord(five_digit_id, pct_stat)
+            c_cnt = make_coord(five_digit_id, count_stat)
+            detail_coords[five_digit_id] = {"pct_coord": c_pct, "count_coord": c_cnt}
+            detail_batch.append({"productId": pid, "coordinate": c_pct, "latestN": 1})
+            detail_batch.append({"productId": pid, "coordinate": c_cnt, "latestN": 1})
+
+    detail_distribution = []
+    if detail_batch:
+        detail_map = client.query_batch(detail_batch)
+        for mid, coords in detail_coords.items():
+            pct = _extract_value(detail_map, coords["pct_coord"])
+            cnt = _extract_value(detail_map, coords["count_coord"])
+            if pct is not None and pct >= 0.3:  # Include occupations with at least 0.3%
+                name = NOC_5DIGIT_NAMES.get(mid, f"NOC {mid}")
+                entry = {"noc": name, "percentage": round(pct, 1)}
+                if cnt is not None:
+                    entry["count"] = int(cnt)
+                detail_distribution.append(entry)
+        detail_distribution.sort(key=lambda x: x["percentage"], reverse=True)
+
+    return {
+        "cip_field": cip_display,
+        "broad_distribution": broad_distribution,
+        "submajor_distribution": submajor_distribution,
+        "detail_distribution": detail_distribution,
+        "not_applicable_pct": round(na_pct, 1) if na_pct else None,
+        "not_applicable_count": int(na_cnt) if na_cnt else None,
+    }
+
+
+# ─── NOC Income for Quadrant Bubble Chart (table 98100412) ────────────
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_noc_income_for_quadrant(
+    noc_entries: list[dict],
+    cip_code: str | None,
+    broad_field: str,
+    education: str,
+) -> list[dict]:
+    """Fetch income data for NOC occupations to build a quadrant bubble chart.
+
+    For each NOC in noc_entries (which has 'noc', 'percentage', and member ID embedded
+    in NOC_5DIGIT_NAMES), queries table 98-10-0412-01 for:
+    - Median income at age 25-64 (Y-axis)
+    - Median income at age 15-24 (for computing growth → bubble radius)
+
+    Coordinate format: geo(1).gender(1).age.edu.cip.work_activity(1).noc.income_stat(3=median).0.0
+
+    Returns list of dicts: [{noc, percentage, income, income_young, income_growth, member_id}, ...]
+    """
+    if not noc_entries:
+        return []
+
+    from data_client import get_client
+    client = get_client()
+    pid = TABLES["noc_income"]
+
+    # Resolve CIP member ID (63-member dimension, same as table 37100280)
+    cip_id, _ = _resolve_cip_to_grad_member(cip_code, broad_field)
+
+    # Education mapping (same as NOC distribution)
+    edu_map = {
+        "Bachelor's degree": 12,
+        "Master's degree": 15,
+        "Earned doctorate": 16,
+        "College, CEGEP or other non-university certificate or diploma": 9,
+        "Apprenticeship or trades certificate or diploma": 6,
+        "High school diploma": 3,
+        "Degree in medicine, dentistry, veterinary medicine or optometry": 14,
+        "University degree (any)": 11,
+    }
+    edu_id = edu_map.get(education, 1)
+
+    age_young = NOC_INCOME_AGE["15-24"]
+    age_mature = NOC_INCOME_AGE["25-64"]
+    median_stat = NOC_INC_STATS["Median employment income"]
+
+    # Reverse lookup: NOC name → member ID
+    name_to_id = {v: k for k, v in NOC_5DIGIT_NAMES.items()}
+
+    # Coordinate: geo(1).gender(1).age.edu.cip.work_activity(1).noc.income_stat.0.0
+    def make_coord(age_id, noc_member_id):
+        return _coord([1, 1, age_id, edu_id, cip_id, 1, noc_member_id, median_stat])
+
+    batch = []
+    noc_query_map = {}  # member_id -> {entry, coord_young, coord_mature}
+
+    for entry in noc_entries:
+        noc_name = entry["noc"]
+        member_id = name_to_id.get(noc_name)
+        if member_id is None:
+            continue
+
+        c_young = make_coord(age_young, member_id)
+        c_mature = make_coord(age_mature, member_id)
+        noc_query_map[member_id] = {
+            "entry": entry,
+            "coord_young": c_young,
+            "coord_mature": c_mature,
+        }
+        batch.append({"productId": pid, "coordinate": c_young, "latestN": 1})
+        batch.append({"productId": pid, "coordinate": c_mature, "latestN": 1})
+
+    if not batch:
+        return []
+
+    coord_map = client.query_batch(batch)
+
+    results = []
+    for member_id, info in noc_query_map.items():
+        entry = info["entry"]
+        income_young = _extract_value(coord_map, info["coord_young"])
+        income_mature = _extract_value(coord_map, info["coord_mature"])
+
+        if income_mature is not None and income_mature > 0:
+            income_growth = None
+            if income_young is not None and income_young > 0:
+                income_growth = round(
+                    (income_mature - income_young) / income_young * 100, 1
+                )
+
+            results.append({
+                "noc": entry["noc"],
+                "percentage": entry["percentage"],
+                "count": entry.get("count"),
+                "income": round(income_mature, 0),
+                "income_young": round(income_young, 0) if income_young else None,
+                "income_growth": income_growth,
+                "member_id": member_id,
+            })
+
+    return results
