@@ -232,6 +232,489 @@ def graduate_income_trajectory(trajectory: list[dict]) -> go.Figure:
     return _apply_layout(fig, "Income Growth After Graduation", height=400)
 
 
+def cip_income_comparison_bar(broad_comparison: list[dict], user_broad_field: str) -> go.Figure:
+    """Grouped bar chart: 2yr vs 5yr median income across all broad CIP fields."""
+    if not broad_comparison:
+        return _empty_chart("No CIP employment distribution data available")
+
+    fields = [d["field"] for d in broad_comparison]
+    labels = [f[:45] + "..." if len(f) > 45 else f for f in fields]
+    income_2yr = [d.get("income_2yr", 0) for d in broad_comparison]
+    income_5yr = [d.get("income_5yr", 0) for d in broad_comparison]
+
+    # Highlight user's field
+    colors_2yr = [
+        "rgba(59, 130, 246, 0.9)" if user_broad_field not in f
+        else "rgba(239, 68, 68, 0.9)"
+        for f in fields
+    ]
+    colors_5yr = [
+        "rgba(99, 102, 241, 0.9)" if user_broad_field not in f
+        else "rgba(239, 68, 68, 0.6)"
+        for f in fields
+    ]
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        y=labels, x=income_2yr, name="2 Years After Graduation",
+        orientation="h",
+        marker=dict(color=DEFAULT_COLOR, line=dict(width=0), cornerradius=3),
+        text=[f"${v:,.0f}" for v in income_2yr], textposition="outside",
+        hovertemplate="%{y}<br>2yr Income: $%{x:,.0f}<extra></extra>",
+    ))
+    fig.add_trace(go.Bar(
+        y=labels, x=income_5yr, name="5 Years After Graduation",
+        orientation="h",
+        marker=dict(color=HIGHLIGHT_COLOR, line=dict(width=0), cornerradius=3),
+        text=[f"${v:,.0f}" for v in income_5yr], textposition="outside",
+        hovertemplate="%{y}<br>5yr Income: $%{x:,.0f}<extra></extra>",
+    ))
+
+    # Mark user's field with annotation
+    for i, f in enumerate(fields):
+        if user_broad_field in f:
+            fig.add_annotation(
+                y=labels[i], x=max(income_5yr) * 1.15,
+                text="Your Field", showarrow=False,
+                font=dict(size=12, color=USER_COLOR, family="Inter, sans-serif"),
+                xanchor="left",
+            )
+
+    fig.update_layout(
+        barmode="group",
+        legend=dict(
+            orientation="h", yanchor="bottom", y=-0.15,
+            xanchor="center", x=0.5, font_size=12,
+        ),
+        xaxis_title="Median Employment Income ($)",
+    )
+    return _apply_layout(
+        fig,
+        "Median Income by Field of Study — 2yr vs 5yr After Graduation",
+        height=max(500, len(fields) * 55),
+    )
+
+
+def cip_subfield_income_bar(subfield_comparison: list[dict], user_field_name: str) -> go.Figure:
+    """Grouped bar chart: 2yr vs 5yr income for sub-fields within a broad field."""
+    if not subfield_comparison:
+        return _empty_chart("No sub-field data available for this category")
+
+    fields = [d["field"] for d in subfield_comparison]
+    labels = [f[:45] + "..." if len(f) > 45 else f for f in fields]
+    income_2yr = [d.get("income_2yr", 0) for d in subfield_comparison]
+    income_5yr = [d.get("income_5yr", 0) for d in subfield_comparison]
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        y=labels, x=income_2yr, name="2 Years After",
+        orientation="h",
+        marker=dict(color=ACCENT_GREEN, line=dict(width=0), cornerradius=3),
+        text=[f"${v:,.0f}" for v in income_2yr], textposition="outside",
+        hovertemplate="%{y}<br>2yr Income: $%{x:,.0f}<extra></extra>",
+    ))
+    fig.add_trace(go.Bar(
+        y=labels, x=income_5yr, name="5 Years After",
+        orientation="h",
+        marker=dict(color=SECONDARY_COLOR, line=dict(width=0), cornerradius=3),
+        text=[f"${v:,.0f}" for v in income_5yr], textposition="outside",
+        hovertemplate="%{y}<br>5yr Income: $%{x:,.0f}<extra></extra>",
+    ))
+
+    # Highlight user's field
+    for i, f in enumerate(fields):
+        if user_field_name in f:
+            fig.add_annotation(
+                y=labels[i], x=max(income_5yr) * 1.15 if income_5yr else 0,
+                text="You", showarrow=False,
+                font=dict(size=12, color=USER_COLOR, family="Inter, sans-serif"),
+                xanchor="left",
+            )
+
+    fig.update_layout(
+        barmode="group",
+        legend=dict(
+            orientation="h", yanchor="bottom", y=-0.15,
+            xanchor="center", x=0.5, font_size=12,
+        ),
+        xaxis_title="Median Employment Income ($)",
+    )
+    return _apply_layout(
+        fig,
+        "Sub-field Income Comparison — 2yr vs 5yr After Graduation",
+        height=max(400, len(fields) * 55),
+    )
+
+
+def noc_distribution_donut(broad_distribution: list[dict]) -> go.Figure:
+    """Donut chart showing NOC broad category distribution for a CIP field."""
+    if not broad_distribution:
+        return _empty_chart("No occupation distribution data available")
+
+    labels = [d["noc"] for d in broad_distribution]
+    values = [d["percentage"] for d in broad_distribution]
+    counts = [d.get("count") for d in broad_distribution]
+
+    # Shorten labels for the chart
+    short_labels = []
+    for label in labels:
+        # Remove the leading digit and space (e.g., "2 Natural and applied sciences" → "Natural and applied sciences")
+        parts = label.split(" ", 1)
+        short_labels.append(parts[1] if len(parts) > 1 else label)
+
+    hover_texts = []
+    for i, label in enumerate(labels):
+        cnt = f"<br>Count: {counts[i]:,}" if counts[i] else ""
+        hover_texts.append(f"{label}<br>Proportion: {values[i]:.1f}%{cnt}")
+
+    # Extract 1-digit NOC codes (e.g. "2 Natural and applied sciences" → "2")
+    digit_codes = []
+    for label in labels:
+        parts = label.split(" ", 1)
+        digit_codes.append(parts[0] if parts[0].isdigit() else label[:1])
+
+    fig = go.Figure(go.Pie(
+        labels=short_labels,
+        values=values,
+        hole=0.45,
+        marker=dict(
+            colors=SERIES_COLORS[:len(labels)],
+            line=dict(color="white", width=2),
+        ),
+        text=digit_codes,
+        textinfo="text",
+        textposition="outside",
+        textfont=dict(size=14, family="Inter, sans-serif", color="#334155"),
+        hovertext=hover_texts,
+        hoverinfo="text",
+        sort=False,
+    ))
+    fig.update_layout(
+        showlegend=False,
+    )
+    return _apply_layout(fig, "Occupation Distribution (NOC Broad Categories)", height=500)
+
+
+def noc_distribution_bar(broad_distribution: list[dict]) -> go.Figure:
+    """Horizontal bar chart showing NOC category proportions."""
+    if not broad_distribution:
+        return _empty_chart("No occupation distribution data available")
+
+    labels = [d["noc"] for d in broad_distribution]
+    values = [d["percentage"] for d in broad_distribution]
+    colors = SERIES_COLORS[:len(labels)]
+
+    fig = go.Figure(go.Bar(
+        y=labels, x=values, orientation="h",
+        marker=dict(color=colors, line=dict(width=0), cornerradius=4),
+        text=[f"{v:.1f}%" for v in values], textposition="outside",
+        hovertemplate="%{y}<br>Proportion: %{x:.1f}%<extra></extra>",
+    ))
+    fig.update_layout(xaxis_title="Proportion (%)")
+    return _apply_layout(fig, "Employment Direction — Proportion by NOC Category", height=max(400, len(labels) * 40))
+
+
+def noc_submajor_bar(submajor_distribution: list[dict], top_n: int = 15) -> go.Figure:
+    """Horizontal bar chart showing top NOC sub-major group proportions."""
+    if not submajor_distribution:
+        return _empty_chart("No detailed occupation data available")
+
+    data = submajor_distribution[:top_n]
+    data = list(reversed(data))  # Reverse for horizontal bar (highest at top)
+
+    labels = [d["noc"] for d in data]
+    values = [d["percentage"] for d in data]
+    counts = [d.get("count") for d in data]
+
+    hover_texts = []
+    for i in range(len(labels)):
+        cnt = f"<br>Count: {counts[i]:,}" if counts[i] else ""
+        hover_texts.append(f"{labels[i]}<br>Proportion: {values[i]:.1f}%{cnt}")
+
+    # Gradient colors from low to high
+    max_val = max(values) if values else 1
+    colors = [
+        f"rgba(99, 102, 241, {0.3 + 0.7 * v / max_val})"
+        for v in values
+    ]
+
+    fig = go.Figure(go.Bar(
+        y=labels, x=values, orientation="h",
+        marker=dict(color=colors, line=dict(width=0), cornerradius=4),
+        text=[f"{v:.1f}%" for v in values], textposition="outside",
+        hovertext=hover_texts, hoverinfo="text",
+    ))
+    fig.update_layout(xaxis_title="Proportion (%)")
+    return _apply_layout(
+        fig,
+        f"Top {min(top_n, len(submajor_distribution))} Specific Occupation Groups (NOC 2-digit)",
+        height=max(450, len(data) * 38),
+    )
+
+
+def noc_detail_bar(detail_distribution: list[dict], top_n: int = 20, oasis_noc_set: set | None = None) -> go.Figure:
+    """Horizontal bar chart showing top specific occupations (5-digit NOC).
+
+    If oasis_noc_set is provided, matching bars are highlighted in amber.
+    """
+    if not detail_distribution:
+        return _empty_chart("No detailed occupation data available")
+
+    data = detail_distribution[:top_n]
+    data = list(reversed(data))  # Reverse for horizontal bar (highest at top)
+
+    labels = [d["noc"] for d in data]
+    values = [d["percentage"] for d in data]
+    counts = [d.get("count") for d in data]
+
+    hover_texts = []
+    for i in range(len(labels)):
+        cnt = f"<br>Count: {counts[i]:,}" if counts[i] else ""
+        hover_texts.append(f"{labels[i]}<br>Proportion: {values[i]:.1f}%{cnt}")
+
+    # Check which NOCs match OaSIS interests
+    oasis_noc_set = oasis_noc_set or set()
+
+    def _is_oasis_match(noc_label: str) -> bool:
+        code = noc_label.split(" ", 1)[0]
+        return code in oasis_noc_set
+
+    # Color gradient based on value; amber for OaSIS matches
+    max_val = max(values) if values else 1
+    colors = []
+    line_widths = []
+    line_colors = []
+    display_labels = []
+    for i, v in enumerate(values):
+        if _is_oasis_match(labels[i]):
+            colors.append(ACCENT_AMBER)
+            line_widths.append(2)
+            line_colors.append("#B45309")
+            display_labels.append(f"\u2605 {labels[i]}")
+        else:
+            colors.append(f"rgba(99, 102, 241, {0.25 + 0.75 * v / max_val})")
+            line_widths.append(0)
+            line_colors.append("rgba(0,0,0,0)")
+            display_labels.append(labels[i])
+
+    fig = go.Figure(go.Bar(
+        y=display_labels, x=values, orientation="h",
+        marker=dict(
+            color=colors,
+            line=dict(width=line_widths, color=line_colors),
+            cornerradius=4,
+        ),
+        text=[f"{v:.1f}%" for v in values], textposition="outside",
+        hovertext=hover_texts, hoverinfo="text",
+    ))
+    fig.update_layout(xaxis_title="Proportion (%)")
+
+    # Add legend annotation if any OaSIS matches exist
+    if any(_is_oasis_match(l) for l in labels):
+        fig.add_annotation(
+            text="\u2605 = OaSIS Interest Match",
+            xref="paper", yref="paper", x=1.0, y=1.05,
+            showarrow=False,
+            font=dict(size=12, color="#B45309", family="Inter, sans-serif"),
+            xanchor="right",
+        )
+
+    return _apply_layout(
+        fig,
+        f"Top {min(top_n, len(detail_distribution))} Specific Occupations (5-digit NOC)",
+        height=max(500, len(data) * 32),
+    )
+
+
+def cip_growth_bar(broad_comparison: list[dict], user_broad_field: str) -> go.Figure:
+    """Horizontal bar chart showing income growth percentage (2yr→5yr) by field."""
+    data = [d for d in broad_comparison if d.get("growth_pct") is not None]
+    if not data:
+        return _empty_chart("No income growth data available")
+
+    data.sort(key=lambda x: x["growth_pct"])
+    fields = [d["field"] for d in data]
+    labels = [f[:45] + "..." if len(f) > 45 else f for f in fields]
+    growth = [d["growth_pct"] for d in data]
+    colors = [
+        USER_COLOR if user_broad_field in f else ACCENT_GREEN
+        for f in fields
+    ]
+
+    fig = go.Figure(go.Bar(
+        y=labels, x=growth, orientation="h",
+        marker=dict(color=colors, line=dict(width=0), cornerradius=4),
+        text=[f"{g:+.1f}%" for g in growth], textposition="outside",
+        hovertemplate="%{y}<br>Income Growth (2yr→5yr): %{x:+.1f}%<extra></extra>",
+    ))
+    fig.update_layout(xaxis_title="Income Growth (%)")
+    return _apply_layout(
+        fig,
+        "Income Growth Rate by Field (2yr → 5yr After Graduation)",
+        height=max(400, len(fields) * 35),
+    )
+
+
+def noc_quadrant_bubble(quadrant_data: list[dict], oasis_noc_set: set | None = None) -> go.Figure:
+    """Quadrant bubble chart: X=employment count, Y=income, bubble size=employment share.
+
+    Each bubble represents a specific occupation (5-digit NOC).
+    Quadrant lines are drawn at the median of X and Y values.
+    If oasis_noc_set is provided, matching bubbles use star markers in amber.
+    """
+    if not quadrant_data:
+        return _empty_chart("No data available for quadrant chart")
+
+    # Filter to entries with valid count and income
+    valid = [d for d in quadrant_data if d.get("income") is not None and d.get("count") is not None and d["count"] > 0]
+    if not valid:
+        return _empty_chart("Insufficient data for quadrant chart")
+
+    oasis_noc_set = oasis_noc_set or set()
+
+    def _is_oasis(noc_name: str) -> bool:
+        return noc_name.split(" ", 1)[0] in oasis_noc_set
+
+    counts = [d["count"] for d in valid]
+    incomes = [d["income"] for d in valid]
+    percentages = [d["percentage"] for d in valid]
+    names = [d["noc"] for d in valid]
+
+    # Compute medians for quadrant lines
+    sorted_cnt = sorted(counts)
+    sorted_inc = sorted(incomes)
+    median_cnt = sorted_cnt[len(sorted_cnt) // 2]
+    median_inc = sorted_inc[len(sorted_inc) // 2]
+
+    # Scale bubble sizes: map percentage to a reasonable marker range (10-55)
+    min_pct = min(percentages)
+    max_pct = max(percentages)
+    pct_range = max_pct - min_pct if max_pct != min_pct else 1
+    sizes = [
+        10 + 45 * (p - min_pct) / pct_range
+        for p in percentages
+    ]
+
+    # Color by quadrant
+    def _quadrant_color(cnt, inc):
+        if cnt >= median_cnt and inc >= median_inc:
+            return ACCENT_GREEN       # Top-right: many people + high income
+        elif cnt < median_cnt and inc >= median_inc:
+            return HIGHLIGHT_COLOR     # Top-left: fewer people + high income
+        elif cnt >= median_cnt and inc < median_inc:
+            return ACCENT_AMBER        # Bottom-right: many people + lower income
+        else:
+            return ACCENT_ROSE         # Bottom-left: fewer people + lower income
+
+    def _make_hover(i):
+        growth_str = f"{valid[i]['income_growth']:+.0f}%" if valid[i].get("income_growth") is not None else "N/A"
+        young_str = f"${valid[i]['income_young']:,.0f}" if valid[i].get("income_young") else "N/A"
+        oasis_tag = "<br><b>\u2605 OaSIS Interest Match</b>" if _is_oasis(names[i]) else ""
+        return (
+            f"<b>{names[i]}</b><br>"
+            f"Employment count: {counts[i]:,}<br>"
+            f"Employment share: {percentages[i]:.1f}%<br>"
+            f"Income (25-64): ${incomes[i]:,.0f}<br>"
+            f"Income (15-24): {young_str}<br>"
+            f"Income growth: {growth_str}"
+            f"{oasis_tag}"
+        )
+
+    fig = go.Figure()
+
+    # Split into normal and OaSIS traces
+    norm_idx = [i for i in range(len(valid)) if not _is_oasis(names[i])]
+    oasis_idx = [i for i in range(len(valid)) if _is_oasis(names[i])]
+
+    # Normal bubbles
+    if norm_idx:
+        fig.add_trace(go.Scatter(
+            x=[counts[i] for i in norm_idx],
+            y=[incomes[i] for i in norm_idx],
+            mode="markers",
+            name="Occupations",
+            marker=dict(
+                size=[sizes[i] for i in norm_idx],
+                color=[_quadrant_color(counts[i], incomes[i]) for i in norm_idx],
+                opacity=0.75,
+                line=dict(width=1.5, color="white"),
+            ),
+            hovertext=[_make_hover(i) for i in norm_idx],
+            hoverinfo="text",
+            showlegend=False,
+        ))
+
+    # OaSIS match bubbles — star markers, amber, slightly larger
+    if oasis_idx:
+        fig.add_trace(go.Scatter(
+            x=[counts[i] for i in oasis_idx],
+            y=[incomes[i] for i in oasis_idx],
+            mode="markers",
+            name="\u2605 OaSIS Interest Match",
+            marker=dict(
+                size=[sizes[i] * 1.3 for i in oasis_idx],
+                color=ACCENT_AMBER,
+                opacity=0.9,
+                symbol="star",
+                line=dict(width=2.5, color="#B45309"),
+            ),
+            hovertext=[_make_hover(i) for i in oasis_idx],
+            hoverinfo="text",
+            showlegend=True,
+        ))
+
+    # Quadrant divider lines
+    fig.add_hline(
+        y=median_inc, line_dash="dash", line_color="rgba(100,116,139,0.4)",
+        line_width=1.5,
+        annotation_text=f"Median income: ${median_inc:,.0f}",
+        annotation_position="top left",
+        annotation_font=dict(size=10, color="#64748B"),
+    )
+    fig.add_vline(
+        x=median_cnt, line_dash="dash", line_color="rgba(100,116,139,0.4)",
+        line_width=1.5,
+        annotation_text=f"Median count: {median_cnt:,}",
+        annotation_position="top right",
+        annotation_font=dict(size=10, color="#64748B"),
+    )
+
+    # Quadrant labels
+    x_max = max(counts) * 1.15
+    y_max = max(incomes) * 1.08
+    x_min = min(counts) * 0.85
+    y_min = min(incomes) * 0.92
+
+    quadrant_labels = [
+        (x_max * 0.85, y_max * 0.97, "Many People + High Pay", ACCENT_GREEN),
+        (x_min * 1.05, y_max * 0.97, "Few People + High Pay", HIGHLIGHT_COLOR),
+        (x_max * 0.85, y_min * 1.02, "Many People + Lower Pay", ACCENT_AMBER),
+        (x_min * 1.05, y_min * 1.02, "Few People + Lower Pay", ACCENT_ROSE),
+    ]
+    for qx, qy, qlabel, qcolor in quadrant_labels:
+        fig.add_annotation(
+            x=qx, y=qy, text=qlabel, showarrow=False,
+            font=dict(size=11, color=qcolor, family="Inter, sans-serif"),
+            opacity=0.7,
+        )
+
+    fig.update_layout(
+        xaxis_title="Employment Count (number of people)",
+        yaxis_title="Median Income — Age 25-64 ($)",
+        showlegend=bool(oasis_idx),
+        legend=dict(
+            orientation="h", yanchor="bottom", y=-0.12,
+            xanchor="center", x=0.5, font_size=12,
+        ),
+    )
+
+    return _apply_layout(
+        fig,
+        "Occupation Quadrant — Employment Count vs Income (bubble = share %)",
+        height=650,
+    )
+
+
 def radar_overview(employment_rate, income_percentile, low_unemployment, vacancy_score, income_growth) -> go.Figure:
     """5-axis radar chart for overall field assessment (all values 0-100)."""
     categories = ["Employment Rate", "Income Ranking", "Low Unemployment", "Job Demand", "Income Growth"]

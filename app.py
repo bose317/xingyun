@@ -18,23 +18,35 @@ from config import FIELD_OPTIONS, EDUCATION_OPTIONS, GEO_OPTIONS
 from cip_codes import CIP_TO_BROAD, CIP_SERIES, CIP_SUBSERIES, CIP_CODES
 from field_matcher import match_fields, resolve_subfield
 from processors import (
+    fetch_cip_employment_distribution,
     fetch_graduate_outcomes,
     fetch_income,
     fetch_job_vacancies,
     fetch_labour_force,
+    fetch_noc_distribution,
+    fetch_noc_income_for_quadrant,
     fetch_subfield_comparison,
     fetch_unemployment_trends,
 )
 from charts import (
+    cip_growth_bar,
+    cip_income_comparison_bar,
+    cip_subfield_income_bar,
     education_comparison_grouped,
     employment_rate_bar,
     graduate_income_trajectory,
     income_by_education_line,
     income_ranking_bar,
     job_vacancy_dual_axis,
+    noc_detail_bar,
+    noc_distribution_donut,
+    noc_distribution_bar,
+    noc_quadrant_bubble,
+    noc_submajor_bar,
     radar_overview,
     unemployment_trend_lines,
 )
+from oasis_client import fetch_oasis_matches, HOLLAND_CODES, HOLLAND_DESCRIPTIONS
 from analysis_engine import run_all_analyses
 from analysis_charts import (
     composite_score_gauge,
@@ -278,6 +290,62 @@ def render_profile_page():
 
     st.divider()
 
+    # ── Interest Profile (OaSIS) ─────────────────────────────
+    st.subheader("Interest Profile (OaSIS)")
+    st.caption(
+        "Select your top 3 Holland Code interests in order of dominance. "
+        "This will be used to find matching occupations via the OaSIS Advanced Interest Search."
+    )
+
+    holland_names = list(HOLLAND_CODES.keys())
+
+    saved_i1 = st.session_state.get("oasis_interest_1", holland_names[0])
+    saved_i2 = st.session_state.get("oasis_interest_2", holland_names[1])
+    saved_i3 = st.session_state.get("oasis_interest_3", holland_names[2])
+
+    col_i1, col_i2, col_i3 = st.columns(3)
+    with col_i1:
+        idx1 = holland_names.index(saved_i1) if saved_i1 in holland_names else 0
+        interest_1 = st.selectbox(
+            "Most Dominant",
+            holland_names,
+            index=idx1,
+            key="sel_interest_1",
+        )
+        st.caption(HOLLAND_DESCRIPTIONS.get(interest_1, ""))
+
+    # Exclude already-selected for 2nd pick
+    opts_2 = [h for h in holland_names if h != interest_1]
+    with col_i2:
+        if saved_i2 in opts_2:
+            idx2 = opts_2.index(saved_i2)
+        else:
+            idx2 = 0
+        interest_2 = st.selectbox(
+            "Second Dominant",
+            opts_2,
+            index=idx2,
+            key="sel_interest_2",
+        )
+        st.caption(HOLLAND_DESCRIPTIONS.get(interest_2, ""))
+
+    # Exclude both for 3rd pick
+    opts_3 = [h for h in holland_names if h not in (interest_1, interest_2)]
+    with col_i3:
+        if saved_i3 in opts_3:
+            idx3 = opts_3.index(saved_i3)
+        else:
+            idx3 = 0
+        interest_3 = st.selectbox(
+            "Third Dominant",
+            opts_3,
+            index=idx3,
+            key="sel_interest_3",
+        )
+        st.caption(HOLLAND_DESCRIPTIONS.get(interest_3, ""))
+
+    st.divider()
+
     # ── Confirm ───────────────────────────────────────────────
     if broad_field:
         if cip_code and cip_name:
@@ -293,6 +361,40 @@ def render_profile_page():
         st.warning("Please search or browse to select a field of study.")
 
     can_proceed = bool(broad_field)
+
+    # CIP Employment Distribution button
+    col_btn1, col_btn2 = st.columns(2)
+    with col_btn1:
+        if st.button(
+            "View Graduate Employment Distribution",
+            use_container_width=True,
+            disabled=not can_proceed,
+            help="View 2yr and 5yr post-graduation income distribution for your CIP field",
+        ):
+            st.session_state["user_name"] = user_name
+            st.session_state["user_age"] = user_age
+            st.session_state["user_gender"] = user_gender
+            st.session_state["broad_field"] = broad_field
+            st.session_state["subfield"] = subfield
+            st.session_state["cip_code"] = cip_code
+            st.session_state["cip_name"] = cip_name
+            st.session_state["education"] = education
+            st.session_state["geo"] = geo
+            st.session_state["_field_query"] = query
+            # Save OaSIS interest selections and fetch matches
+            st.session_state["oasis_interest_1"] = interest_1
+            st.session_state["oasis_interest_2"] = interest_2
+            st.session_state["oasis_interest_3"] = interest_3
+            with st.spinner("Querying OaSIS interest matches..."):
+                oasis_result = fetch_oasis_matches(interest_1, interest_2, interest_3)
+            st.session_state["oasis_result"] = oasis_result
+            st.session_state["wizard_page"] = "cip_distribution"
+            st.rerun()
+
+    with col_btn2:
+        pass  # Visual balance
+
+    st.divider()
 
     if st.button(
         "Confirm & View Analysis",
@@ -882,6 +984,363 @@ def render_deep_analysis_page():
     )
 
 
+# ── Page: CIP Employment Distribution ─────────────────────────────
+
+
+def render_cip_distribution_page():
+    _scroll_to_top()
+
+    broad_field = st.session_state.get("broad_field") or "Total"
+    subfield = st.session_state.get("subfield")
+    cip_code = st.session_state.get("cip_code")
+    cip_name = st.session_state.get("cip_name")
+    education = st.session_state.get("education", "Bachelor's degree")
+    geo = st.session_state.get("geo", "Canada")
+    field_display = subfield or broad_field
+
+    # ── Sidebar ───────────────────────────────────────────────
+    with st.sidebar:
+        st.header("Your Profile")
+        name = st.session_state.get("user_name", "")
+        if name:
+            st.write(f"**Name:** {name}")
+        st.write(f"**Age:** {st.session_state.get('user_age', '—')}")
+        st.write(f"**Gender:** {st.session_state.get('user_gender', '—')}")
+        if cip_code and cip_name:
+            st.write(f"**Major:** {cip_name} (CIP {cip_code})")
+            st.write(f"**Broad field:** {broad_field}")
+        else:
+            st.write(f"**Field:** {field_display}")
+        st.write(f"**Education:** {education}")
+        st.write(f"**Province:** {geo}")
+        st.divider()
+        if st.button("Back to Profile", use_container_width=True):
+            st.session_state["wizard_page"] = "profile"
+            st.rerun()
+
+    # ── Header ─────────────────────────────────────────────────
+    st.markdown(
+        '<div id="yf-header">'
+        '  <h1>YF — Graduate Employment Distribution</h1>'
+        '  <p class="caption">'
+        "Employment income, occupation direction (NOC), and proportions after graduation</p>"
+        '  <div class="nav">'
+        '    <a href="#sect-overview">Overview</a>'
+        '    <a href="#sect-noc">Occupation (NOC)</a>'
+        '    <a href="#sect-noc-detail">NOC Groups</a>'
+        '    <a href="#sect-noc-specific">Specific Jobs</a>'
+        '    <a href="#sect-quadrant">Quadrant</a>'
+        '    <a href="#sect-broad">Income by Field</a>'
+        '    <a href="#sect-subfield">Sub-fields</a>'
+        '    <a href="#sect-growth">Growth Rate</a>'
+        '  </div>'
+        "</div>"
+        '<div style="height:160px"></div>',
+        unsafe_allow_html=True,
+    )
+
+    # Fetch both datasets
+    try:
+        with st.spinner("Querying graduate employment distribution data..."):
+            result = fetch_cip_employment_distribution(cip_code, broad_field, education, geo)
+    except Exception as e:
+        st.error(f"Error loading CIP employment distribution: {e}")
+        st.code(traceback.format_exc())
+        return
+
+    try:
+        with st.spinner("Querying occupation (NOC) distribution data..."):
+            noc_result = fetch_noc_distribution(cip_code, broad_field, education)
+    except Exception as e:
+        st.error(f"Error loading NOC distribution: {e}")
+        st.code(traceback.format_exc())
+        noc_result = None
+
+    user_summary = result["user_summary"]
+    user_field_name = result["user_field_name"]
+
+    # ── OaSIS Interest Match Summary ──────────────────────────
+    oasis_result = st.session_state.get("oasis_result")
+    oasis_noc_set = set()
+    if oasis_result and oasis_result.get("success") and oasis_result.get("noc_codes"):
+        oasis_noc_set = set(oasis_result["noc_codes"])
+
+        # Find overlapping NOCs between OaSIS results and CIP distribution
+        if noc_result and noc_result.get("detail_distribution"):
+            cip_noc_codes = set()
+            for occ in noc_result["detail_distribution"]:
+                code = occ["noc"].split(" ", 1)[0]
+                cip_noc_codes.add(code)
+            overlap = oasis_noc_set & cip_noc_codes
+
+            if overlap:
+                # Build display names for overlapping NOCs
+                overlap_names = []
+                for occ in noc_result["detail_distribution"]:
+                    code = occ["noc"].split(" ", 1)[0]
+                    if code in overlap:
+                        overlap_names.append(occ["noc"])
+                i1 = st.session_state.get("oasis_interest_1", "")
+                i2 = st.session_state.get("oasis_interest_2", "")
+                i3 = st.session_state.get("oasis_interest_3", "")
+                match_list = "\n".join(f"- {n}" for n in overlap_names)
+                st.success(
+                    f"**OaSIS Interest Match Found!** Your interest profile "
+                    f"({i1} > {i2} > {i3}) aligns with "
+                    f"**{len(overlap)}** occupation(s) that graduates in your field actually enter:\n\n"
+                    f"{match_list}"
+                )
+            else:
+                i1 = st.session_state.get("oasis_interest_1", "")
+                i2 = st.session_state.get("oasis_interest_2", "")
+                i3 = st.session_state.get("oasis_interest_3", "")
+                st.info(
+                    f"**OaSIS Interest Search** ({i1} > {i2} > {i3}): "
+                    f"Found {len(oasis_noc_set)} matching occupations, "
+                    f"but none overlap with the top occupations for this field of study. "
+                    f"The matched occupations are highlighted with \u2605 if they appear in the charts below."
+                )
+    elif oasis_result and not oasis_result.get("success"):
+        st.warning(
+            f"OaSIS interest search could not be completed: {oasis_result.get('error', 'Unknown error')}. "
+            "Charts will display without interest highlights."
+        )
+
+    # ── Section: Overview ──────────────────────────────────────
+    st.markdown('<div id="sect-overview"></div>', unsafe_allow_html=True)
+    st.header("Your Field — Graduate Income Overview")
+
+    if cip_code and cip_name:
+        st.info(f"**CIP {cip_code}** — {cip_name}  →  Data mapped to: **{user_field_name}**")
+
+    col1, col2, col3, col4 = st.columns(4)
+    inc2 = user_summary.get("income_2yr")
+    inc5 = user_summary.get("income_5yr")
+    growth = user_summary.get("growth_pct")
+    grad_count = user_summary.get("graduate_count")
+    col1.metric("Income (2yr after)", f"${inc2:,.0f}" if inc2 else "N/A")
+    col2.metric("Income (5yr after)", f"${inc5:,.0f}" if inc5 else "N/A")
+    col3.metric("Growth (2yr→5yr)", f"{growth:+.1f}%" if growth is not None else "N/A")
+    col4.metric("Graduate Count", f"{grad_count:,}" if grad_count else "N/A")
+
+    st.divider()
+
+    # ── Section: NOC Occupation Distribution ───────────────────
+    st.markdown('<div id="sect-noc"></div>', unsafe_allow_html=True)
+    st.header("Employment Direction — Occupation (NOC) Distribution")
+    st.caption(
+        "Where do graduates with this field of study actually work? "
+        "This shows the distribution across NOC (National Occupational Classification) "
+        "broad categories, based on 2021 Census data."
+    )
+
+    if noc_result and noc_result["broad_distribution"]:
+        col_chart1, col_chart2 = st.columns([2, 3])
+        with col_chart1:
+            st.plotly_chart(
+                noc_distribution_donut(noc_result["broad_distribution"]),
+                use_container_width=True,
+            )
+        with col_chart2:
+            st.plotly_chart(
+                noc_distribution_bar(noc_result["broad_distribution"]),
+                use_container_width=True,
+            )
+
+        # Show top 3 occupations as callouts
+        top3 = noc_result["broad_distribution"][:3]
+        cols = st.columns(len(top3))
+        for col, occ in zip(cols, top3):
+            cnt_str = f" ({occ['count']:,} people)" if occ.get("count") else ""
+            col.metric(occ["noc"], f"{occ['percentage']:.1f}%", delta=cnt_str)
+
+        # Not applicable info
+        na_pct = noc_result.get("not_applicable_pct")
+        if na_pct and na_pct > 0:
+            na_cnt = noc_result.get("not_applicable_count")
+            na_detail = f" ({na_cnt:,} people)" if na_cnt else ""
+            st.caption(
+                f"Note: {na_pct:.1f}% of graduates had no occupation classification{na_detail} "
+                "(e.g., not in labour force, students, etc.)"
+            )
+    else:
+        st.warning("No occupation distribution data available.")
+
+    st.divider()
+
+    # ── Section: NOC Detailed Sub-groups ───────────────────────
+    st.markdown('<div id="sect-noc-detail"></div>', unsafe_allow_html=True)
+    st.header("Detailed Occupation Groups (NOC 2-digit)")
+    st.caption(
+        "More granular breakdown of the top occupation sub-groups "
+        "where graduates in this field are employed."
+    )
+
+    if noc_result and noc_result["submajor_distribution"]:
+        st.plotly_chart(
+            noc_submajor_bar(noc_result["submajor_distribution"]),
+            use_container_width=True,
+        )
+
+        # Show full table in expander
+        with st.expander("View all occupation groups"):
+            for i, occ in enumerate(noc_result["submajor_distribution"], 1):
+                cnt_str = f" — {occ['count']:,} people" if occ.get("count") else ""
+                st.write(f"{i}. **{occ['noc']}**: {occ['percentage']:.1f}%{cnt_str}")
+    else:
+        st.info("No detailed occupation group data available.")
+
+    st.divider()
+
+    # ── Section: NOC 5-digit Specific Occupations ──────────────
+    st.markdown('<div id="sect-noc-specific"></div>', unsafe_allow_html=True)
+    st.header("Specific Occupations (NOC 5-digit)")
+    st.caption(
+        "The most specific occupation titles where graduates in this field work. "
+        "Shows the top occupations with their NOC 2021 codes and proportions."
+    )
+
+    if noc_result and noc_result.get("detail_distribution"):
+        st.plotly_chart(
+            noc_detail_bar(noc_result["detail_distribution"], oasis_noc_set=oasis_noc_set),
+            use_container_width=True,
+        )
+
+        # Show full table in expander
+        with st.expander("View all specific occupations"):
+            for i, occ in enumerate(noc_result["detail_distribution"], 1):
+                code = occ["noc"].split(" ", 1)[0]
+                oasis_marker = " \u2605 **OaSIS Match**" if code in oasis_noc_set else ""
+                cnt_str = f" — {occ['count']:,} people" if occ.get("count") else ""
+                st.write(f"{i}. **{occ['noc']}**: {occ['percentage']:.1f}%{cnt_str}{oasis_marker}")
+    else:
+        st.info("No specific occupation data available.")
+
+    st.divider()
+
+    # ── Section: Quadrant Bubble Chart ─────────────────────────
+    st.markdown('<div id="sect-quadrant"></div>', unsafe_allow_html=True)
+    st.header("Occupation Quadrant — Employment Count vs Income")
+    st.caption(
+        "Each bubble represents a specific occupation (5-digit NOC). "
+        "X-axis: employment count (more people → further right). "
+        "Y-axis: median income for age 25-64 (higher → more income). "
+        "Bubble size: employment share (larger bubble = higher proportion of graduates)."
+    )
+
+    if noc_result and noc_result.get("detail_distribution"):
+        try:
+            with st.spinner("Querying income data for occupation quadrant..."):
+                quadrant_data = fetch_noc_income_for_quadrant(
+                    noc_result["detail_distribution"],
+                    cip_code,
+                    broad_field,
+                    education,
+                )
+            if quadrant_data:
+                st.plotly_chart(
+                    noc_quadrant_bubble(quadrant_data, oasis_noc_set=oasis_noc_set),
+                    use_container_width=True,
+                )
+
+                # Legend explanation
+                st.markdown(
+                    "**Quadrant Interpretation:**\n"
+                    "- **Top-right (green):** Many people + high income — strong career paths\n"
+                    "- **Top-left (indigo):** Fewer people + high income — specialized, less common\n"
+                    "- **Bottom-right (amber):** Many people + lower income — accessible but lower-paying\n"
+                    "- **Bottom-left (rose):** Fewer people + lower income — less common and lower-paying\n\n"
+                    "*Larger bubbles indicate a higher proportion of graduates in that occupation.*"
+                )
+            else:
+                st.info("Could not retrieve income data for the occupation quadrant chart.")
+        except Exception as e:
+            st.error(f"Error loading quadrant data: {e}")
+            st.code(traceback.format_exc())
+    else:
+        st.info("No specific occupation data available for quadrant chart.")
+
+    st.divider()
+
+    # ── Section: Broad field income comparison ─────────────────
+    st.markdown('<div id="sect-broad"></div>', unsafe_allow_html=True)
+    st.header("Income by Field of Study — All Fields")
+    st.caption(
+        "Comparison of median employment income across all broad fields of study, "
+        "2 years and 5 years after graduation. Your field is highlighted."
+    )
+
+    if result["broad_comparison"]:
+        st.plotly_chart(
+            cip_income_comparison_bar(result["broad_comparison"], broad_field),
+            use_container_width=True,
+        )
+    else:
+        st.warning("No broad field comparison data available.")
+
+    st.divider()
+
+    # ── Section: Sub-field comparison ──────────────────────────
+    st.markdown('<div id="sect-subfield"></div>', unsafe_allow_html=True)
+    st.header(f"Sub-field Breakdown — {broad_field}")
+    st.caption(
+        f"Detailed income comparison within the '{broad_field}' category."
+    )
+
+    if result["subfield_comparison"]:
+        st.plotly_chart(
+            cip_subfield_income_bar(result["subfield_comparison"], user_field_name),
+            use_container_width=True,
+        )
+    else:
+        st.info("No sub-field data available for this broad category.")
+
+    st.divider()
+
+    # ── Section: Growth rate comparison ────────────────────────
+    st.markdown('<div id="sect-growth"></div>', unsafe_allow_html=True)
+    st.header("Income Growth Rate — 2yr to 5yr After Graduation")
+    st.caption(
+        "Percentage increase in median income from 2 years to 5 years after graduation. "
+        "Higher growth rates indicate stronger career trajectory early on."
+    )
+
+    if result["broad_comparison"]:
+        st.plotly_chart(
+            cip_growth_bar(result["broad_comparison"], broad_field),
+            use_container_width=True,
+        )
+    else:
+        st.warning("No growth rate data available.")
+
+    # ── Navigation ─────────────────────────────────────────────
+    st.divider()
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("Back to Profile", use_container_width=True, key="cip_back_profile"):
+            st.session_state["wizard_page"] = "profile"
+            st.rerun()
+    with col2:
+        if st.button(
+            "Continue to Full Analysis",
+            type="primary",
+            use_container_width=True,
+        ):
+            st.session_state["wizard_page"] = "analysis"
+            st.rerun()
+
+    # Footer
+    st.divider()
+    st.markdown(
+        '<div class="yf-footer">Data sources: Statistics Canada Table 37-10-0280-01 '
+        '(Graduate income by CIP field), Table 98-10-0403-01 '
+        '(Occupation by field of study), and Table 98-10-0412-01 '
+        '(Income by NOC and CIP, 2021 Census). '
+        'Queried in real-time via WDS REST API.</div>',
+        unsafe_allow_html=True,
+    )
+
+
 # ── Router ────────────────────────────────────────────────────────
 
 
@@ -892,6 +1351,8 @@ def main():
     page = st.session_state["wizard_page"]
     if page == "deep_analysis":
         render_deep_analysis_page()
+    elif page == "cip_distribution":
+        render_cip_distribution_page()
     elif page == "analysis":
         render_analysis_page()
     else:
