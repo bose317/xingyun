@@ -622,46 +622,46 @@ def noc_quadrant_bubble(quadrant_data: list[dict], oasis_noc_set: set | None = N
 
     fig = go.Figure()
 
-    # Split into normal and OaSIS traces
-    norm_idx = [i for i in range(len(valid)) if not _is_oasis(names[i])]
+    # Determine bubble colors: OaSIS matches → red, others → quadrant color
+    bubble_colors = []
+    bubble_line_colors = []
+    bubble_line_widths = []
+    for i in range(len(valid)):
+        if _is_oasis(names[i]):
+            bubble_colors.append(USER_COLOR)
+            bubble_line_colors.append("#991B1B")
+            bubble_line_widths.append(2.5)
+        else:
+            bubble_colors.append(_quadrant_color(counts[i], incomes[i]))
+            bubble_line_colors.append("white")
+            bubble_line_widths.append(1.5)
+
+    # All points as regular bubbles
+    fig.add_trace(go.Scatter(
+        x=counts,
+        y=incomes,
+        mode="markers",
+        marker=dict(
+            size=sizes,
+            color=bubble_colors,
+            opacity=0.75,
+            line=dict(width=bubble_line_widths, color=bubble_line_colors),
+        ),
+        hovertext=[_make_hover(i) for i in range(len(valid))],
+        hoverinfo="text",
+        showlegend=False,
+    ))
+
+    # Overlay red stars inside OaSIS-matched bubbles
     oasis_idx = [i for i in range(len(valid)) if _is_oasis(names[i])]
-
-    # Normal bubbles
-    if norm_idx:
-        fig.add_trace(go.Scatter(
-            x=[counts[i] for i in norm_idx],
-            y=[incomes[i] for i in norm_idx],
-            mode="markers",
-            name="Occupations",
-            marker=dict(
-                size=[sizes[i] for i in norm_idx],
-                color=[_quadrant_color(counts[i], incomes[i]) for i in norm_idx],
-                opacity=0.75,
-                line=dict(width=1.5, color="white"),
-            ),
-            hovertext=[_make_hover(i) for i in norm_idx],
-            hoverinfo="text",
-            showlegend=False,
-        ))
-
-    # OaSIS match bubbles — star markers, amber, slightly larger
-    if oasis_idx:
-        fig.add_trace(go.Scatter(
-            x=[counts[i] for i in oasis_idx],
-            y=[incomes[i] for i in oasis_idx],
-            mode="markers",
-            name="\u2605 OaSIS Interest Match",
-            marker=dict(
-                size=[sizes[i] * 1.3 for i in oasis_idx],
-                color=ACCENT_AMBER,
-                opacity=0.9,
-                symbol="star",
-                line=dict(width=2.5, color="#B45309"),
-            ),
-            hovertext=[_make_hover(i) for i in oasis_idx],
-            hoverinfo="text",
-            showlegend=True,
-        ))
+    for i in oasis_idx:
+        fig.add_annotation(
+            x=counts[i], y=incomes[i],
+            text="\u2605",
+            showarrow=False,
+            font=dict(size=max(10, int(sizes[i] * 0.45)), color="white"),
+            xanchor="center", yanchor="middle",
+        )
 
     # Quadrant divider lines
     fig.add_hline(
@@ -701,12 +701,18 @@ def noc_quadrant_bubble(quadrant_data: list[dict], oasis_noc_set: set | None = N
     fig.update_layout(
         xaxis_title="Employment Count (number of people)",
         yaxis_title="Median Income — Age 25-64 ($)",
-        showlegend=bool(oasis_idx),
-        legend=dict(
-            orientation="h", yanchor="bottom", y=-0.12,
-            xanchor="center", x=0.5, font_size=12,
-        ),
+        showlegend=False,
     )
+
+    # Add OaSIS legend annotation if matches exist
+    if oasis_idx:
+        fig.add_annotation(
+            text="<b>\u2605</b> = OaSIS Interest Match",
+            xref="paper", yref="paper", x=1.0, y=1.05,
+            showarrow=False,
+            font=dict(size=12, color=USER_COLOR, family="Inter, sans-serif"),
+            xanchor="right",
+        )
 
     return _apply_layout(
         fig,
