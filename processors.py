@@ -781,6 +781,95 @@ def fetch_noc_distribution(
     }
 
 
+# ─── NOC Gender Breakdown (table 98100403) ────────────────────────────
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_noc_gender_breakdown(
+    noc_entries: list[dict],
+    cip_code: str | None,
+    broad_field: str,
+    education: str,
+    top_n: int = 5,
+) -> list[dict]:
+    """Fetch male/female count breakdown for top NOC occupations.
+
+    noc_entries: list of dicts with 'noc' (name string) and 'count' keys,
+                 as returned in detail_distribution or submajor_distribution.
+    Returns list of dicts: {noc, count_total, count_male, count_female}.
+    Coordinate: geo(1).age(3=25-64).cip.edu.gender.noc.stat.0.0.0
+    """
+    from data_client import get_client
+    client = get_client()
+    pid = TABLES["cip_noc_distribution"]
+
+    edu_map = {
+        "Bachelor's degree": 12,
+        "Master's degree": 15,
+        "Earned doctorate": 16,
+        "College, CEGEP or other non-university certificate or diploma": 9,
+        "Apprenticeship or trades certificate or diploma": 6,
+        "High school diploma": 3,
+        "Degree in medicine, dentistry, veterinary medicine or optometry": 14,
+        "University degree (any)": 11,
+    }
+    edu_id = edu_map.get(education, 1)
+    cip_id, _ = _resolve_cip_to_noc_dist_member(cip_code, broad_field)
+    count_stat = NOC_DIST_STATS["count"]
+
+    # Build a reverse lookup: NOC name → member ID
+    # Combine submajor and 5-digit maps
+    all_noc_ids = {}
+    all_noc_ids.update(NOC_SUBMAJOR_GROUPS)
+    all_noc_ids.update(NOC_5DIGIT_NAMES)  # This is id→name, we need name→id
+    name_to_id = {}
+    name_to_id.update({name: mid for name, mid in NOC_SUBMAJOR_GROUPS.items()})
+    name_to_id.update({name: mid for mid, name in NOC_5DIGIT_NAMES.items()})
+
+    entries = noc_entries[:top_n]
+
+    def make_coord(gender_id, noc_id):
+        return _coord([1, 3, cip_id, edu_id, gender_id, noc_id, count_stat])
+
+    batch = []
+    coord_keys = []  # (index, gender_label, coord)
+
+    for i, entry in enumerate(entries):
+        noc_name = entry["noc"]
+        noc_id = name_to_id.get(noc_name)
+        if not noc_id:
+            continue
+        for gender_id, gender_label in [(1, "total"), (2, "male"), (3, "female")]:
+            c = make_coord(gender_id, noc_id)
+            coord_keys.append((i, gender_label, c))
+            batch.append({"productId": pid, "coordinate": c, "latestN": 1})
+
+    if not batch:
+        return []
+
+    coord_map = client.query_batch(batch)
+
+    # Collect results
+    results_map = {}  # index → {total, male, female}
+    for i, gender_label, c in coord_keys:
+        val = _extract_value(coord_map, c)
+        if i not in results_map:
+            results_map[i] = {"noc": entries[i]["noc"], "total": None, "male": None, "female": None}
+        results_map[i][gender_label] = int(val) if val is not None else None
+
+    result = []
+    for i in range(len(entries)):
+        if i in results_map:
+            r = results_map[i]
+            result.append({
+                "noc": r["noc"],
+                "count_total": r["total"],
+                "count_male": r["male"],
+                "count_female": r["female"],
+            })
+    return result
+
+
 # ─── NOC Income for Quadrant Bubble Chart (table 98100412) ────────────
 
 

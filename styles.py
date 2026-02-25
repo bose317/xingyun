@@ -81,7 +81,7 @@ div[data-testid="stMetric"]:hover {
 }
 
 div[data-testid="stMetric"] label {
-    font-size: 0.78rem !important;
+    font-size: 0.82rem !important;
     font-weight: 500 !important;
     color: #64748B !important;
     text-transform: uppercase;
@@ -89,7 +89,7 @@ div[data-testid="stMetric"] label {
 }
 
 div[data-testid="stMetric"] [data-testid="stMetricValue"] {
-    font-size: 1.7rem !important;
+    font-size: 1.85rem !important;
     font-weight: 700 !important;
     color: #1E293B !important;
 }
@@ -111,6 +111,8 @@ div[data-testid="stMetric"] [data-testid="stMetricValue"] > div {
 
 /* ── Chart containers ────────────────────────────────────── */
 .stPlotlyChart {
+    background: #FAFBFC;
+    border: 1px solid #F1F5F9;
     border-radius: 14px;
     overflow: hidden;
     transition: box-shadow 0.3s ease;
@@ -118,6 +120,11 @@ div[data-testid="stMetric"] [data-testid="stMetricValue"] > div {
 
 .stPlotlyChart:hover {
     box-shadow: 0 4px 20px rgba(0,0,0,0.06);
+}
+
+/* ── Selectbox inputs ───────────────────────────────────── */
+div[data-baseweb="select"] > div {
+    border-radius: 10px !important;
 }
 
 /* ── Card wrapper ────────────────────────────────────────── */
@@ -264,6 +271,7 @@ hr {
 .stApp h2 {
     position: relative;
     padding-bottom: 10px;
+    margin-top: 0.5rem;
 }
 
 .stApp h2::after {
@@ -301,6 +309,33 @@ hr {
 .yf-grade-c { background: linear-gradient(135deg, #FBBF24, #F59E0B); }
 .yf-grade-d { background: linear-gradient(135deg, #FB923C, #F97316); }
 .yf-grade-f { background: linear-gradient(135deg, #F87171, #EF4444); }
+
+/* ── OaSIS match banner ──────────────────────────────────── */
+.yf-oasis-banner {
+    background: #FFFBEB;
+    border-left: 4px solid #F59E0B;
+    border-radius: 0 12px 12px 0;
+    padding: 16px 20px;
+    margin-bottom: 20px;
+}
+.yf-oasis-banner h4 {
+    color: #92400E;
+    margin: 0 0 6px;
+    font-size: 0.95rem;
+    font-weight: 600;
+}
+.yf-oasis-banner p {
+    color: #78350F;
+    margin: 0;
+    font-size: 0.85rem;
+    line-height: 1.5;
+}
+.yf-oasis-banner ul {
+    margin: 6px 0 0;
+    padding-left: 18px;
+    color: #78350F;
+    font-size: 0.85rem;
+}
 
 /* ── Footer ──────────────────────────────────────────────── */
 .yf-footer {

@@ -24,6 +24,7 @@ from processors import (
     fetch_job_vacancies,
     fetch_labour_force,
     fetch_noc_distribution,
+    fetch_noc_gender_breakdown,
     fetch_noc_income_for_quadrant,
     fetch_subfield_comparison,
     fetch_unemployment_trends,
@@ -46,7 +47,11 @@ from charts import (
     radar_overview,
     unemployment_trend_lines,
 )
-from oasis_client import fetch_oasis_matches, HOLLAND_CODES, HOLLAND_DESCRIPTIONS
+from oasis_client import (
+    fetch_oasis_matches, fetch_noc_description, fetch_noc_unit_profile,
+    fetch_jobbank_skills, fetch_jobbank_wages,
+    HOLLAND_CODES, HOLLAND_DESCRIPTIONS,
+)
 from analysis_engine import run_all_analyses
 from analysis_charts import (
     composite_score_gauge,
@@ -363,7 +368,7 @@ def render_profile_page():
     can_proceed = bool(broad_field)
 
     # CIP Employment Distribution button
-    col_btn1, col_btn2 = st.columns(2)
+    col_btn1, _ = st.columns([2, 1])
     with col_btn1:
         if st.button(
             "View Graduate Employment Distribution",
@@ -390,9 +395,6 @@ def render_profile_page():
             st.session_state["oasis_result"] = oasis_result
             st.session_state["wizard_page"] = "cip_distribution"
             st.rerun()
-
-    with col_btn2:
-        pass  # Visual balance
 
     st.divider()
 
@@ -1083,12 +1085,15 @@ def render_cip_distribution_page():
                 i1 = st.session_state.get("oasis_interest_1", "")
                 i2 = st.session_state.get("oasis_interest_2", "")
                 i3 = st.session_state.get("oasis_interest_3", "")
-                match_list = "\n".join(f"- {n}" for n in overlap_names)
-                st.success(
-                    f"**OaSIS Interest Match Found!** Your interest profile "
-                    f"({i1} > {i2} > {i3}) aligns with "
-                    f"**{len(overlap)}** occupation(s) that graduates in your field actually enter:\n\n"
-                    f"{match_list}"
+                match_items = "".join(f"<li>{n}</li>" for n in overlap_names)
+                st.markdown(
+                    f'<div class="yf-oasis-banner">'
+                    f'<h4>OaSIS Interest Match Found!</h4>'
+                    f'<p>Your interest profile ({i1} &gt; {i2} &gt; {i3}) aligns with '
+                    f'<strong>{len(overlap)}</strong> occupation(s) that graduates in your field actually enter:</p>'
+                    f'<ul>{match_items}</ul>'
+                    f'</div>',
+                    unsafe_allow_html=True,
                 )
             else:
                 i1 = st.session_state.get("oasis_interest_1", "")
@@ -1141,6 +1146,7 @@ def render_cip_distribution_page():
                 noc_distribution_donut(noc_result["broad_distribution"]),
                 use_container_width=True,
             )
+            st.caption("Hover over slices for detailed breakdowns.")
         with col_chart2:
             st.plotly_chart(
                 noc_distribution_bar(noc_result["broad_distribution"]),
@@ -1243,15 +1249,29 @@ def render_cip_distribution_page():
                     use_container_width=True,
                 )
 
-                # Legend explanation
-                st.markdown(
-                    "**Quadrant Interpretation:**\n"
-                    "- **Top-right (green):** Many people + high income — strong career paths\n"
-                    "- **Top-left (indigo):** Fewer people + high income — specialized, less common\n"
-                    "- **Bottom-right (amber):** Many people + lower income — accessible but lower-paying\n"
-                    "- **Bottom-left (rose):** Fewer people + lower income — less common and lower-paying\n\n"
-                    "*Larger bubbles indicate a higher proportion of graduates in that occupation.*"
+                # Compact quadrant legend
+                q1, q2, q3, q4 = st.columns(4)
+                q1.markdown(
+                    '<span style="color:#10B981;font-size:1.2rem;">&#9679;</span> '
+                    '<span style="font-size:0.82rem;">Many + High Pay</span>',
+                    unsafe_allow_html=True,
                 )
+                q2.markdown(
+                    '<span style="color:#6366F1;font-size:1.2rem;">&#9679;</span> '
+                    '<span style="font-size:0.82rem;">Few + High Pay</span>',
+                    unsafe_allow_html=True,
+                )
+                q3.markdown(
+                    '<span style="color:#F59E0B;font-size:1.2rem;">&#9679;</span> '
+                    '<span style="font-size:0.82rem;">Many + Lower Pay</span>',
+                    unsafe_allow_html=True,
+                )
+                q4.markdown(
+                    '<span style="color:#F43F5E;font-size:1.2rem;">&#9679;</span> '
+                    '<span style="font-size:0.82rem;">Few + Lower Pay</span>',
+                    unsafe_allow_html=True,
+                )
+                st.caption("Bubble size = share of graduates. Hover for details.")
             else:
                 st.info("Could not retrieve income data for the occupation quadrant chart.")
         except Exception as e:
@@ -1341,20 +1361,1215 @@ def render_cip_distribution_page():
     )
 
 
+# ── New Page: Career Exploration ──────────────────────────────────
+
+
+def render_career_exploration_page():
+    st.title("Career Exploration")
+
+    # ── Step 1: Tell us about yourself ─────────────────────
+    st.subheader("Step 1: Tell us about yourself")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        user_name = st.text_input(
+            "Name",
+            value=st.session_state.get("user_name", ""),
+            key="ce_name",
+        )
+    with col2:
+        user_age = st.slider(
+            "Age",
+            min_value=16,
+            max_value=70,
+            value=st.session_state.get("user_age", 25),
+            key="ce_age",
+        )
+
+    col3, col4 = st.columns(2)
+    with col3:
+        gender_options = ["Male", "Female", "Other"]
+        gender_idx = 0
+        saved_gender = st.session_state.get("user_gender")
+        if saved_gender in gender_options:
+            gender_idx = gender_options.index(saved_gender)
+        user_gender = st.selectbox("Gender", gender_options, index=gender_idx, key="ce_gender")
+    with col4:
+        edu_keys = list(EDUCATION_OPTIONS.keys())
+        edu_idx = 0
+        saved_edu = st.session_state.get("education")
+        if saved_edu in edu_keys:
+            edu_idx = edu_keys.index(saved_edu)
+        education = st.selectbox("Education Level", edu_keys, index=edu_idx, key="ce_edu")
+
+    geo_idx = 0
+    saved_geo = st.session_state.get("geo")
+    if saved_geo in GEO_OPTIONS:
+        geo_idx = GEO_OPTIONS.index(saved_geo)
+    geo = st.selectbox("Province / Territory", GEO_OPTIONS, index=geo_idx, key="ce_geo")
+
+    st.divider()
+
+    # ── Step 2: Field of Study ─────────────────────────────
+    st.subheader("Step 2: Field of Study")
+
+    # If Browse was just used, clear the search box
+    if st.session_state.pop("_ce_clear_search", False):
+        _query_default = ""
+    else:
+        _query_default = st.session_state.get("_ce_field_query", "")
+
+    # Search input + Browse button side by side
+    search_col, browse_col = st.columns([5, 1])
+    with search_col:
+        query = st.text_input(
+            "Search by keyword or CIP code (e.g. 'computer science', '14.08')",
+            value=_query_default,
+            key="ce_field_query",
+        )
+    with browse_col:
+        st.markdown("<div style='height: 28px'></div>", unsafe_allow_html=True)
+        browse_open = st.button(
+            "Browse",
+            key="ce_browse_toggle",
+            help="If you don't know your major name or CIP code, look it up here",
+            use_container_width=True,
+        )
+
+    # Track browse panel state
+    if browse_open:
+        st.session_state["_ce_browse_open"] = not st.session_state.get("_ce_browse_open", False)
+
+    broad_field = st.session_state.get("broad_field")
+    subfield = st.session_state.get("subfield")
+    cip_code = st.session_state.get("cip_code")
+    cip_name = st.session_state.get("cip_name")
+
+    if query:
+        matches = match_fields(query, FIELD_OPTIONS)
+        if matches:
+            options = [m["display_name"] for m in matches]
+            preselect = 0
+            saved_display = st.session_state.get("_selected_display")
+            if saved_display in options:
+                preselect = options.index(saved_display)
+
+            choice = st.radio(
+                "Select your field:",
+                options,
+                index=preselect,
+                key="ce_field_radio",
+            )
+            selected = matches[options.index(choice)]
+            broad_field = selected["broad_field"]
+            subfield = selected["subfield"]
+            cip_code = selected.get("cip_code")
+            cip_name = selected.get("cip_name")
+
+            if cip_code and not subfield:
+                st.caption(
+                    f"CIP {cip_code} has no dedicated statistics — "
+                    f"analysis will use the broad category: {broad_field}"
+                )
+            elif cip_code and subfield and not subfield.startswith(cip_code):
+                st.caption(
+                    f"CIP {cip_code} mapped to nearest available data: {subfield}"
+                )
+        else:
+            st.warning("No matches found. Try a different keyword or browse using the button above.")
+            broad_field = None
+            subfield = None
+            cip_code = None
+            cip_name = None
+
+    # Browse all fields panel (shown as expander when toggled)
+    if st.session_state.get("_ce_browse_open", False):
+        with st.expander("Browse all fields", expanded=True):
+            # ── Level 1: Broad field ──
+            broad_fields = list(FIELD_OPTIONS.keys())
+            browse_idx = 0
+            if broad_field in broad_fields:
+                browse_idx = broad_fields.index(broad_field)
+            browse_broad = st.selectbox(
+                "Broad field",
+                broad_fields,
+                index=browse_idx,
+                key="ce_browse_broad",
+            )
+
+            # ── Level 2: CIP series (2-digit) ──
+            series_for_broad = sorted(
+                code for code, bf in CIP_TO_BROAD.items() if bf == browse_broad
+            )
+            series_options = {
+                code: f"{code}. {CIP_SERIES.get(code, code)}"
+                for code in series_for_broad
+                if code in CIP_SERIES
+            }
+            chosen_series = None
+            if series_options:
+                series_labels = ["(All series)"] + list(series_options.values())
+                series_choice = st.selectbox(
+                    "Series (2-digit CIP)",
+                    series_labels,
+                    key="ce_browse_series",
+                )
+                if series_choice != "(All series)":
+                    for code, label in series_options.items():
+                        if label == series_choice:
+                            chosen_series = code
+                            break
+
+            # ── Level 3: Subseries (4-digit) ──
+            chosen_subseries = None
+            if chosen_series:
+                subs_for_series = sorted(
+                    (code, name)
+                    for code, name in CIP_SUBSERIES.items()
+                    if code.startswith(chosen_series + ".")
+                )
+                if subs_for_series:
+                    sub4_labels = ["(All subseries)"] + [
+                        f"{code} {name}" for code, name in subs_for_series
+                    ]
+                    sub4_choice = st.selectbox(
+                        "Subseries (4-digit CIP)",
+                        sub4_labels,
+                        key="ce_browse_sub4",
+                    )
+                    if sub4_choice != "(All subseries)":
+                        chosen_subseries = sub4_choice.split(" ", 1)[0]
+
+            # ── Level 4: Class (6-digit) ──
+            chosen_class = None
+            if chosen_subseries:
+                classes_for_sub = sorted(
+                    (code, name)
+                    for code, name in CIP_CODES.items()
+                    if code.startswith(chosen_subseries)
+                )
+                if classes_for_sub:
+                    cls_labels = ["(All programs)"] + [
+                        f"{code} {name}" for code, name in classes_for_sub
+                    ]
+                    cls_choice = st.selectbox(
+                        "Program (6-digit CIP)",
+                        cls_labels,
+                        key="ce_browse_cls6",
+                    )
+                    if cls_choice != "(All programs)":
+                        chosen_class = cls_choice.split(" ", 1)[0]
+
+            if st.button("Use this field", key="ce_use_browse"):
+                _bf = browse_broad
+                _sf = None
+                _cc = None
+                _cn = None
+                if chosen_class:
+                    _cc = chosen_class
+                    _cn = CIP_CODES.get(chosen_class, "")
+                    _sf, _bf = resolve_subfield(_cc, browse_broad, FIELD_OPTIONS)
+                elif chosen_subseries:
+                    general_code = chosen_subseries + "00"
+                    if general_code in CIP_CODES:
+                        _cc = general_code
+                        _cn = CIP_CODES[general_code]
+                    else:
+                        first = sorted(
+                            c for c in CIP_CODES if c.startswith(chosen_subseries)
+                        )
+                        _cc = first[0] if first else None
+                        _cn = CIP_CODES.get(_cc, "") if _cc else None
+                    if _cc:
+                        _sf, _bf = resolve_subfield(_cc, browse_broad, FIELD_OPTIONS)
+                st.session_state["broad_field"] = _bf
+                st.session_state["subfield"] = _sf
+                st.session_state["cip_code"] = _cc
+                st.session_state["cip_name"] = _cn
+                st.session_state["_ce_field_query"] = ""
+                st.session_state["_ce_clear_search"] = True
+                st.session_state["_ce_browse_open"] = False
+                st.rerun()
+
+    st.divider()
+
+    # ── Confirm ───────────────────────────────────────────────
+    if broad_field:
+        if cip_code and cip_name:
+            st.info(
+                f"**CIP {cip_code}** — {cip_name}\n\n"
+                f"Broad field: {broad_field}"
+                + (f"  |  Data source: {subfield}" if subfield else "")
+            )
+        else:
+            field_display = subfield or broad_field
+            st.info(f"Selected field: **{field_display}**")
+    else:
+        st.warning("Please search or browse to select a field of study.")
+
+    can_proceed = bool(broad_field)
+
+    if st.button(
+        "Confirm & View Analysis",
+        type="primary",
+        use_container_width=True,
+        disabled=not can_proceed,
+        key="ce_confirm",
+    ):
+        st.session_state["user_name"] = user_name
+        st.session_state["user_age"] = user_age
+        st.session_state["user_gender"] = user_gender
+        st.session_state["broad_field"] = broad_field
+        st.session_state["subfield"] = subfield
+        st.session_state["cip_code"] = cip_code
+        st.session_state["cip_name"] = cip_name
+        st.session_state["education"] = education
+        st.session_state["geo"] = geo
+        st.session_state["_ce_field_query"] = query
+        if query:
+            _matches = match_fields(query, FIELD_OPTIONS)
+            for m in _matches:
+                if m["broad_field"] == broad_field and m["subfield"] == subfield:
+                    st.session_state["_selected_display"] = m["display_name"]
+                    break
+            else:
+                st.session_state["_selected_display"] = (
+                    f"{subfield}  ({broad_field})" if subfield else broad_field
+                )
+        else:
+            st.session_state["_selected_display"] = (
+                f"{subfield}  ({broad_field})" if subfield else broad_field
+            )
+        st.session_state["wizard_page"] = "ce_analysis"
+        st.rerun()
+
+
+# ── New Page: CE Analysis ────────────────────────────────────────
+
+
+def render_ce_analysis_page():
+    _scroll_to_top()
+
+    broad_field = st.session_state.get("broad_field") or "Total"
+    subfield = st.session_state.get("subfield")
+    cip_code = st.session_state.get("cip_code")
+    cip_name = st.session_state.get("cip_name")
+    education = st.session_state.get("education", "Bachelor's degree")
+    geo = st.session_state.get("geo", "Canada")
+    field_display = subfield or broad_field
+
+    # ── Sidebar ───────────────────────────────────────────────
+    with st.sidebar:
+        st.header("Your Profile")
+        name = st.session_state.get("user_name", "")
+        if name:
+            st.write(f"**Name:** {name}")
+        st.write(f"**Age:** {st.session_state.get('user_age', '—')}")
+        st.write(f"**Gender:** {st.session_state.get('user_gender', '—')}")
+        if cip_code and cip_name:
+            st.write(f"**Major:** {cip_name} (CIP {cip_code})")
+            st.write(f"**Broad field:** {broad_field}")
+        else:
+            st.write(f"**Field:** {field_display}")
+        st.write(f"**Education:** {education}")
+        st.write(f"**Province:** {geo}")
+        st.divider()
+        if st.button("Back to Career Exploration", use_container_width=True, key="ce_back"):
+            st.session_state["wizard_page"] = "career_exploration"
+            st.rerun()
+
+    # ── Header ─────────────────────────────────────────────────
+    st.title("Career Exploration — Analysis")
+    if cip_code and cip_name:
+        st.info(f"**CIP {cip_code}** — {cip_name}  |  Broad field: **{broad_field}**")
+    else:
+        st.info(f"Field of study: **{field_display}**")
+
+    # ── Fetch NOC distribution data ───────────────────────────
+    noc_result = None
+    try:
+        with st.spinner("Querying occupation (NOC) distribution data..."):
+            noc_result = fetch_noc_distribution(cip_code, broad_field, education)
+    except Exception as e:
+        st.error(f"Error loading NOC distribution: {e}")
+        st.code(traceback.format_exc())
+
+    if not noc_result:
+        st.warning("No occupation distribution data available.")
+        return
+
+    # ── Chart 1: Detailed Occupation Groups (NOC 2-digit) ─────
+    st.header("Detailed Occupation Groups (NOC 2-digit)")
+    st.caption(
+        "Granular breakdown of the top occupation sub-groups "
+        "where graduates in this field are employed."
+    )
+
+    if noc_result.get("submajor_distribution"):
+        st.plotly_chart(
+            noc_submajor_bar(noc_result["submajor_distribution"]),
+            use_container_width=True,
+        )
+    else:
+        st.info("No detailed occupation group data available.")
+
+    st.divider()
+
+    # ── Chart 2: Specific Occupations (NOC 5-digit) ───────────
+    st.header("Specific Occupations (NOC 5-digit)")
+    st.caption(
+        "The most specific occupation titles where graduates in this field work, "
+        "with their NOC 2021 codes and proportions."
+    )
+
+    if noc_result.get("detail_distribution"):
+        st.plotly_chart(
+            noc_detail_bar(noc_result["detail_distribution"]),
+            use_container_width=True,
+        )
+    else:
+        st.info("No specific occupation data available.")
+
+    st.divider()
+
+    # ── Top 5 NOC occupations with gender breakdown ───────────
+    st.header("Top 5 Occupations — Detailed Headcount")
+    st.caption(
+        "Employment headcount breakdown (Total / Male / Female) for the top 5 "
+        "specific occupations that graduates in this field enter."
+    )
+
+    # Use 5-digit detail if available, otherwise fall back to 2-digit
+    top_entries = noc_result.get("detail_distribution") or noc_result.get("submajor_distribution") or []
+
+    if top_entries:
+        try:
+            with st.spinner("Querying gender breakdown for top occupations..."):
+                gender_data = fetch_noc_gender_breakdown(
+                    top_entries, cip_code, broad_field, education, top_n=5
+                )
+        except Exception as e:
+            st.error(f"Error loading gender breakdown: {e}")
+            st.code(traceback.format_exc())
+            gender_data = []
+
+        if gender_data:
+            # Fetch OaSIS descriptions for all top NOCs
+            noc_desc_data = {}  # full_name -> {description, sub_profiles}
+            noc_codes_to_fetch = []
+            for item in gender_data:
+                code = item["noc"].split(" ", 1)[0]  # e.g. "41221"
+                if len(code) == 5 and code.isdigit():
+                    noc_codes_to_fetch.append((code, item["noc"]))
+
+            if noc_codes_to_fetch:
+                with st.spinner("Fetching occupation descriptions from OaSIS..."):
+                    for code, full_name in noc_codes_to_fetch:
+                        info = fetch_noc_description(code)
+                        if info and (info.get("description") or info.get("sub_profiles")):
+                            noc_desc_data[full_name] = info
+
+            for i, item in enumerate(gender_data, 1):
+                noc_name = item["noc"]
+                total = item["count_total"]
+                male = item["count_male"]
+                female = item["count_female"]
+
+                total_str = f"{total:,}" if total is not None else "N/A"
+                male_str = f"{male:,}" if male is not None else "N/A"
+                female_str = f"{female:,}" if female is not None else "N/A"
+
+                st.markdown(f"**{i}. {noc_name}**")
+
+                # Show OaSIS description and/or sub-profiles
+                info = noc_desc_data.get(noc_name)
+                if info:
+                    desc = info.get("description")
+                    subs = info.get("sub_profiles") or []
+
+                    if desc:
+                        # Direct description available
+                        st.markdown(
+                            f"<div style='background:#F8FAFC; border-left:3px solid #6366F1; "
+                            f"padding:10px 14px; margin:6px 0 10px; border-radius:0 8px 8px 0; "
+                            f"color:#475569; font-size:0.9rem; line-height:1.5;'>"
+                            f"{desc}</div>",
+                            unsafe_allow_html=True,
+                        )
+
+                    if subs:
+                        # Build sub-profile HTML
+                        sub_items = ""
+                        for sub in subs:
+                            sub_code = sub["code"]
+                            sub_title = sub["title"]
+                            sub_desc = sub.get("description") or ""
+                            desc_html = (
+                                f"<div style='color:#475569; font-size:0.85rem; "
+                                f"margin:2px 0 6px 18px; line-height:1.4;'>{sub_desc}</div>"
+                                if sub_desc else ""
+                            )
+                            sub_items += (
+                                f"<div style='margin-bottom:6px;'>"
+                                f"<span style='color:#6366F1; font-weight:600; font-size:0.88rem;'>"
+                                f"{sub_code}</span>"
+                                f" — <span style='font-weight:500; font-size:0.88rem;'>"
+                                f"{sub_title}</span>"
+                                f"{desc_html}</div>"
+                            )
+                        st.markdown(
+                            f"<div style='background:#F8FAFC; border-left:3px solid #A855F7; "
+                            f"padding:10px 14px; margin:6px 0 10px; border-radius:0 8px 8px 0;'>"
+                            f"<div style='color:#7C3AED; font-weight:600; font-size:0.82rem; "
+                            f"margin-bottom:8px; text-transform:uppercase; letter-spacing:0.03em;'>"
+                            f"Occupational Profiles</div>"
+                            f"{sub_items}</div>",
+                            unsafe_allow_html=True,
+                        )
+
+                st.markdown(
+                    f"&nbsp;&nbsp;&nbsp;&nbsp;"
+                    f"Total: **{total_str}**&emsp;|&emsp;"
+                    f"Male: **{male_str}**&emsp;|&emsp;"
+                    f"Female: **{female_str}**"
+                )
+                if i < len(gender_data):
+                    st.markdown("---")
+        else:
+            st.info("Gender breakdown data not available for these occupations.")
+    else:
+        st.info("No occupation data available to show headcount breakdown.")
+
+    # ── Career Analysis button ────────────────────────────────
+    st.divider()
+
+    # Save top NOC codes for the next page
+    top_noc_codes = []
+    top_entries_src = noc_result.get("detail_distribution") or noc_result.get("submajor_distribution") or []
+    for entry in top_entries_src[:5]:
+        code = entry["noc"].split(" ", 1)[0]
+        if len(code) == 5 and code.isdigit():
+            top_noc_codes.append({"code": code, "name": entry["noc"]})
+
+    if top_noc_codes:
+        btn_col1, btn_col2, btn_col3 = st.columns(3)
+        with btn_col1:
+            if st.button(
+                "View Job Title Details",
+                type="primary",
+                use_container_width=True,
+                key="ce_career_analysis_btn",
+            ):
+                st.session_state["ce_top_nocs"] = top_noc_codes
+                st.session_state["wizard_page"] = "ce_job_analysis"
+                st.rerun()
+        with btn_col2:
+            if st.button(
+                "View Required Skills",
+                type="primary",
+                use_container_width=True,
+                key="ce_skills_btn",
+            ):
+                st.session_state["ce_top_nocs"] = top_noc_codes
+                st.session_state["wizard_page"] = "ce_skills"
+                st.rerun()
+        with btn_col3:
+            if st.button(
+                "View Income Analysis",
+                type="primary",
+                use_container_width=True,
+                key="ce_wages_btn",
+            ):
+                st.session_state["ce_top_nocs"] = top_noc_codes
+                st.session_state["wizard_page"] = "ce_wages"
+                st.rerun()
+
+
+# ── New Page: CE Job Analysis ────────────────────────────────────
+
+
+def render_ce_job_analysis_page():
+    _scroll_to_top()
+
+    broad_field = st.session_state.get("broad_field") or "Total"
+    subfield = st.session_state.get("subfield")
+    cip_code = st.session_state.get("cip_code")
+    cip_name = st.session_state.get("cip_name")
+    education = st.session_state.get("education", "Bachelor's degree")
+    geo = st.session_state.get("geo", "Canada")
+    field_display = subfield or broad_field
+
+    top_nocs = st.session_state.get("ce_top_nocs", [])
+
+    # ── Sidebar ───────────────────────────────────────────────
+    with st.sidebar:
+        st.header("Your Profile")
+        name = st.session_state.get("user_name", "")
+        if name:
+            st.write(f"**Name:** {name}")
+        st.write(f"**Age:** {st.session_state.get('user_age', '—')}")
+        st.write(f"**Gender:** {st.session_state.get('user_gender', '—')}")
+        if cip_code and cip_name:
+            st.write(f"**Major:** {cip_name} (CIP {cip_code})")
+            st.write(f"**Broad field:** {broad_field}")
+        else:
+            st.write(f"**Field:** {field_display}")
+        st.write(f"**Education:** {education}")
+        st.write(f"**Province:** {geo}")
+        st.divider()
+        if st.button("Back to Analysis", use_container_width=True, key="job_back_analysis"):
+            st.session_state["wizard_page"] = "ce_analysis"
+            st.rerun()
+        if st.button("Back to Career Exploration", use_container_width=True, key="job_back_ce"):
+            st.session_state["wizard_page"] = "career_exploration"
+            st.rerun()
+
+    # ── Header ─────────────────────────────────────────────────
+    st.title("Career Analysis — Job Title Profiles")
+    if cip_code and cip_name:
+        st.info(f"**CIP {cip_code}** — {cip_name}")
+    st.caption(
+        "Detailed unit group profiles for the top occupations that graduates "
+        "in this field enter. Data from the National Occupational Classification (NOC)."
+    )
+
+    if not top_nocs:
+        st.warning("No occupation data available. Please go back and run the analysis first.")
+        return
+
+    # ── Fetch all profiles ────────────────────────────────────
+    profiles = {}
+    with st.spinner("Fetching unit group profiles from NOC..."):
+        for noc in top_nocs:
+            profiles[noc["code"]] = fetch_noc_unit_profile(noc["code"])
+
+    # ── Profile sections to display ───────────────────────────
+    PROFILE_ROWS = [
+        ("example_titles", "Example Titles"),
+        ("main_duties", "Main Duties"),
+        ("employment_requirements", "Employment Requirements"),
+        ("additional_information", "Additional Information"),
+        ("exclusions", "Exclusions"),
+    ]
+
+    # ── Build comparison table ────────────────────────────────
+    # Column headers: one per NOC
+    noc_codes = [n["code"] for n in top_nocs]
+    noc_labels = []
+    for n in top_nocs:
+        p = profiles.get(n["code"], {})
+        title = p.get("title") or n["name"].split(" ", 1)[-1] if " " in n["name"] else n["name"]
+        noc_labels.append(f"**{n['code']}**<br>{title}")
+
+    # Render as styled HTML table
+    # Build header
+    header_cells = "".join(
+        f"<th style='background:linear-gradient(135deg,#6366F1,#8B5CF6); color:white; "
+        f"padding:12px 10px; font-size:0.82rem; font-weight:600; text-align:center; "
+        f"min-width:180px; border-right:1px solid rgba(255,255,255,0.2);'>"
+        f"{profiles.get(n['code'], {}).get('title') or n['name']}<br>"
+        f"<span style='font-weight:400; opacity:0.85;'>NOC {n['code']}</span></th>"
+        for n in top_nocs
+    )
+
+    # Build rows
+    rows_html = ""
+    for field_key, field_label in PROFILE_ROWS:
+        cells = ""
+        for n in top_nocs:
+            p = profiles.get(n["code"], {})
+            items = p.get(field_key) or []
+
+            if items:
+                items_html = "".join(
+                    f"<li style='margin-bottom:3px;'>{item}</li>" for item in items
+                )
+                cell_content = f"<ul style='margin:0; padding-left:16px; font-size:0.82rem; line-height:1.45;'>{items_html}</ul>"
+            else:
+                cell_content = "<span style='color:#94A3B8; font-style:italic; font-size:0.82rem;'>N/A</span>"
+
+            cells += (
+                f"<td style='padding:10px 12px; vertical-align:top; "
+                f"border-bottom:1px solid #E2E8F0; border-right:1px solid #F1F5F9;'>"
+                f"{cell_content}</td>"
+            )
+
+        rows_html += (
+            f"<tr>"
+            f"<td style='padding:10px 12px; font-weight:600; color:#4338CA; "
+            f"background:#F8FAFC; vertical-align:top; white-space:nowrap; "
+            f"border-bottom:1px solid #E2E8F0; border-right:1px solid #E2E8F0; "
+            f"font-size:0.85rem;'>{field_label}</td>"
+            f"{cells}</tr>"
+        )
+
+    table_html = (
+        f"<div style='overflow-x:auto; border:1px solid #E2E8F0; border-radius:12px; "
+        f"box-shadow:0 1px 3px rgba(0,0,0,0.04);'>"
+        f"<table style='width:100%; border-collapse:collapse; table-layout:fixed;'>"
+        f"<thead><tr>"
+        f"<th style='background:#1E293B; color:white; padding:12px; font-size:0.82rem; "
+        f"font-weight:600; text-align:left; min-width:140px; "
+        f"border-right:1px solid rgba(255,255,255,0.15);'>Profile</th>"
+        f"{header_cells}"
+        f"</tr></thead>"
+        f"<tbody>{rows_html}</tbody>"
+        f"</table></div>"
+    )
+
+    st.markdown(table_html, unsafe_allow_html=True)
+
+
+# ── New Page: CE Skills ──────────────────────────────────────────
+
+
+def render_ce_skills_page():
+    _scroll_to_top()
+
+    broad_field = st.session_state.get("broad_field") or "Total"
+    subfield = st.session_state.get("subfield")
+    cip_code = st.session_state.get("cip_code")
+    cip_name = st.session_state.get("cip_name")
+    education = st.session_state.get("education", "Bachelor's degree")
+    geo = st.session_state.get("geo", "Canada")
+    field_display = subfield or broad_field
+
+    top_nocs = st.session_state.get("ce_top_nocs", [])
+
+    # ── Sidebar ───────────────────────────────────────────────
+    with st.sidebar:
+        st.header("Your Profile")
+        name = st.session_state.get("user_name", "")
+        if name:
+            st.write(f"**Name:** {name}")
+        st.write(f"**Age:** {st.session_state.get('user_age', '—')}")
+        st.write(f"**Gender:** {st.session_state.get('user_gender', '—')}")
+        if cip_code and cip_name:
+            st.write(f"**Major:** {cip_name} (CIP {cip_code})")
+            st.write(f"**Broad field:** {broad_field}")
+        else:
+            st.write(f"**Field:** {field_display}")
+        st.write(f"**Education:** {education}")
+        st.write(f"**Province:** {geo}")
+        st.divider()
+        if st.button("Back to Analysis", use_container_width=True, key="skills_back_analysis"):
+            st.session_state["wizard_page"] = "ce_analysis"
+            st.rerun()
+        if st.button("Back to Career Exploration", use_container_width=True, key="skills_back_ce"):
+            st.session_state["wizard_page"] = "career_exploration"
+            st.rerun()
+
+    # ── Header ─────────────────────────────────────────────────
+    st.title("Career Exploration — Required Skills")
+    if cip_code and cip_name:
+        st.info(f"**CIP {cip_code}** — {cip_name}  |  Location: **{geo}**")
+    st.caption(
+        "Skills, work styles, and knowledge requirements for the top occupations. "
+        "Data from Job Bank Canada (jobbank.gc.ca)."
+    )
+
+    if not top_nocs:
+        st.warning("No occupation data available. Please go back and run the analysis first.")
+        return
+
+    # ── Fetch skills for all NOCs ─────────────────────────────
+    all_skills = {}
+    with st.spinner("Fetching skills data from Job Bank..."):
+        for noc in top_nocs:
+            all_skills[noc["code"]] = fetch_jobbank_skills(noc["code"], geo)
+
+    # Check if we got any data
+    has_data = any(
+        s.get("skills") or s.get("work_styles") or s.get("knowledge")
+        for s in all_skills.values()
+    )
+    if not has_data:
+        st.warning("Could not retrieve skills data from Job Bank for these occupations.")
+        return
+
+    # ── Build comparison tables for each section ──────────────
+    SECTIONS = [
+        ("skills", "Skills", "Proficiency / Complexity Level"),
+        ("work_styles", "Work Styles", "Importance"),
+        ("knowledge", "Knowledge", "Knowledge Level"),
+    ]
+
+    # Build header cells (same for all tables)
+    header_cells = ""
+    for n in top_nocs:
+        s = all_skills.get(n["code"], {})
+        title = s.get("title") or n["name"].split(" ", 1)[-1] if " " in n["name"] else n["name"]
+        header_cells += (
+            f"<th style='background:linear-gradient(135deg,#6366F1,#8B5CF6); color:white; "
+            f"padding:5px 4px; font-size:0.7rem; font-weight:600; text-align:center; "
+            f"min-width:90px; border-right:1px solid rgba(255,255,255,0.2);'>"
+            f"{title}<br>"
+            f"<span style='font-weight:400; opacity:0.8; font-size:0.65rem;'>NOC {n['code']}</span></th>"
+        )
+
+    for section_key, section_title, level_label in SECTIONS:
+        st.header(section_title)
+        st.caption(f"Comparison of {section_title.lower()} across occupations — {level_label}")
+
+        # Collect all unique skill names across NOCs for this section
+        all_names = []
+        seen = set()
+        for n in top_nocs:
+            s = all_skills.get(n["code"], {})
+            for item in s.get(section_key, []):
+                if item["name"] not in seen:
+                    seen.add(item["name"])
+                    all_names.append(item["name"])
+
+        if not all_names:
+            st.info(f"No {section_title.lower()} data available.")
+            st.divider()
+            continue
+
+        # Build skill lookup per NOC: name → level
+        noc_lookups = {}
+        for n in top_nocs:
+            s = all_skills.get(n["code"], {})
+            lookup = {}
+            for item in s.get(section_key, []):
+                lookup[item["name"]] = item["level"]
+            noc_lookups[n["code"]] = lookup
+
+        # Color maps: red (highest) → gray (lowest)
+        # Skills & Work Styles: 1-5;  Knowledge: 1-3
+        _COLORS_5 = {
+            5: "#DC2626",   # red
+            4: "#EA580C",   # orange
+            3: "#D97706",   # amber
+            2: "#8B6C4F",   # brown
+            1: "#9CA3AF",   # gray
+        }
+        _COLORS_3 = {
+            3: "#DC2626",   # red
+            2: "#8B6C4F",   # brown
+            1: "#9CA3AF",   # gray
+        }
+        is_knowledge = section_key == "knowledge"
+        color_map = _COLORS_3 if is_knowledge else _COLORS_5
+        max_score = 3 if is_knowledge else 5
+
+        def _badge(value):
+            """Return HTML for a colored number badge."""
+            clr = color_map.get(round(value), "#9CA3AF")
+            display = str(int(value))
+            return (
+                f"<span style='display:inline-block; min-width:22px; text-align:center; "
+                f"background:{clr}; color:#FFF; padding:2px 6px; border-radius:5px; "
+                f"font-size:0.78rem; font-weight:700; line-height:1.3;'>{display}</span>"
+            )
+
+        def _avg_bar(value):
+            """Return HTML for Avg column: bar + number."""
+            clr = color_map.get(round(value), "#9CA3AF")
+            pct = value / max_score * 100
+            display = f"{value:.1f}" if value != int(value) else str(int(value))
+            return (
+                f"<div style='display:flex; align-items:center; gap:5px; min-width:90px;'>"
+                f"<div style='flex:1; background:#E5E7EB; border-radius:4px; height:10px; overflow:hidden;'>"
+                f"<div style='width:{pct:.0f}%; height:100%; background:{clr}; "
+                f"border-radius:4px;'></div></div>"
+                f"<span style='font-size:0.78rem; font-weight:700; color:{clr}; "
+                f"min-width:24px; text-align:right;'>{display}</span></div>"
+            )
+
+        # Build rows
+        rows_html = ""
+        for skill_name in all_names:
+            noc_cells = ""
+            scores = []
+            for n in top_nocs:
+                level = noc_lookups[n["code"]].get(skill_name)
+                if level:
+                    num_int = int(level[0]) if level[0].isdigit() else 0
+                    scores.append(num_int)
+                    cell_content = _badge(num_int)
+                else:
+                    cell_content = "<span style='color:#CBD5E1; font-size:0.75rem;'>—</span>"
+                noc_cells += (
+                    f"<td style='padding:3px 4px; text-align:center; vertical-align:middle; "
+                    f"border-bottom:1px solid #E2E8F0; border-right:1px solid #F1F5F9;'>"
+                    f"{cell_content}</td>"
+                )
+
+            # Average cell (placed right after label)
+            if scores:
+                avg = sum(scores) / len(scores)
+                avg_content = _avg_bar(avg)
+            else:
+                avg_content = "<span style='color:#CBD5E1; font-size:0.75rem;'>—</span>"
+            avg_cell = (
+                f"<td style='padding:3px 8px; vertical-align:middle; "
+                f"border-bottom:1px solid #E2E8F0; border-right:2px solid #E2E8F0; "
+                f"background:#F1F5F9;'>{avg_content}</td>"
+            )
+
+            rows_html += (
+                f"<tr>"
+                f"<td style='padding:3px 8px; font-weight:500; color:#1E293B; "
+                f"background:#FAFBFC; vertical-align:middle; "
+                f"border-bottom:1px solid #E2E8F0; border-right:1px solid #E2E8F0; "
+                f"font-size:0.8rem; line-height:1.3;'>{skill_name}</td>"
+                f"{avg_cell}{noc_cells}</tr>"
+            )
+
+        # Avg column header (right after label)
+        avg_header = (
+            "<th style='background:#374151; color:#FDE68A; "
+            "padding:6px 8px; font-size:0.8rem; font-weight:700; text-align:center; "
+            "min-width:110px; border-right:2px solid rgba(255,255,255,0.3);'>Avg</th>"
+        )
+
+        # Fixed column widths for consistency across all 3 tables
+        n_nocs = len(top_nocs)
+        col_defs = (
+            "<colgroup>"
+            "<col style='width:200px;'/>"   # label
+            "<col style='width:130px;'/>"   # avg
+            + "".join(f"<col style='width:80px;'/>" for _ in range(n_nocs))
+            + "</colgroup>"
+        )
+
+        table_html = (
+            f"<div style='overflow-x:auto; border:1px solid #E2E8F0; border-radius:12px; "
+            f"box-shadow:0 1px 3px rgba(0,0,0,0.04); margin-bottom:8px;'>"
+            f"<table style='width:100%; border-collapse:collapse; table-layout:fixed;'>"
+            f"{col_defs}"
+            f"<thead><tr>"
+            f"<th style='background:#1E293B; color:white; padding:6px 8px; font-size:0.8rem; "
+            f"font-weight:600; text-align:left; "
+            f"border-right:1px solid rgba(255,255,255,0.15);'>{level_label}</th>"
+            f"{avg_header}{header_cells}"
+            f"</tr></thead>"
+            f"<tbody>{rows_html}</tbody>"
+            f"</table></div>"
+        )
+
+        st.markdown(table_html, unsafe_allow_html=True)
+
+        # Legend — colored bars
+        if is_knowledge:
+            legend_items = [
+                ("3", "#DC2626", "Advanced"),
+                ("2", "#8B6C4F", "Intermediate"),
+                ("1", "#9CA3AF", "Basic"),
+            ]
+        else:
+            legend_items = [
+                ("5", "#DC2626", "Highest"),
+                ("4", "#EA580C", "High"),
+                ("3", "#D97706", "Moderate"),
+                ("2", "#8B6C4F", "Low"),
+                ("1", "#9CA3AF", "Basic"),
+            ]
+        legend_html = "".join(
+            f"<span style='display:inline-flex; align-items:center; margin-right:16px;'>"
+            f"<span style='display:inline-block; width:24px; height:10px; "
+            f"background:{clr}; border-radius:3px; margin-right:5px;'></span>"
+            f"<span style='color:#475569; font-size:0.75rem;'>{num} {label}</span></span>"
+            for num, clr, label in legend_items
+        )
+        st.markdown(
+            f"<div style='margin-bottom:16px;'>{legend_html}</div>",
+            unsafe_allow_html=True,
+        )
+        st.divider()
+
+
+# ── New Page: CE Wages / Income Analysis ─────────────────────────
+
+
+def render_ce_wages_page():
+    _scroll_to_top()
+
+    broad_field = st.session_state.get("broad_field") or "Total"
+    subfield = st.session_state.get("subfield")
+    cip_code = st.session_state.get("cip_code")
+    cip_name = st.session_state.get("cip_name")
+    education = st.session_state.get("education", "Bachelor's degree")
+    geo = st.session_state.get("geo", "Canada")
+    field_display = subfield or broad_field
+
+    top_nocs = st.session_state.get("ce_top_nocs", [])
+
+    # ── Sidebar ───────────────────────────────────────────────
+    with st.sidebar:
+        st.header("Your Profile")
+        name = st.session_state.get("user_name", "")
+        if name:
+            st.write(f"**Name:** {name}")
+        st.write(f"**Age:** {st.session_state.get('user_age', '—')}")
+        st.write(f"**Gender:** {st.session_state.get('user_gender', '—')}")
+        if cip_code and cip_name:
+            st.write(f"**Major:** {cip_name} (CIP {cip_code})")
+            st.write(f"**Broad field:** {broad_field}")
+        else:
+            st.write(f"**Field:** {field_display}")
+        st.write(f"**Education:** {education}")
+        st.write(f"**Province:** {geo}")
+        st.divider()
+        if st.button("Back to Analysis", use_container_width=True, key="wages_back_analysis"):
+            st.session_state["wizard_page"] = "ce_analysis"
+            st.rerun()
+        if st.button("Back to Career Exploration", use_container_width=True, key="wages_back_ce"):
+            st.session_state["wizard_page"] = "career_exploration"
+            st.rerun()
+
+    # ── Header ─────────────────────────────────────────────────
+    st.title("Career Exploration — Income Analysis")
+    if cip_code and cip_name:
+        st.info(f"**CIP {cip_code}** — {cip_name}  |  Location: **{geo}**")
+    st.caption(
+        "Hourly wage data (Low / Median / High) for the top occupations. "
+        "Data from Job Bank Canada (jobbank.gc.ca)."
+    )
+
+    if not top_nocs:
+        st.warning("No occupation data available. Please go back and run the analysis first.")
+        return
+
+    # ── Fetch wages for all NOCs ──────────────────────────────
+    all_wages = {}
+    with st.spinner("Fetching wage data from Job Bank..."):
+        for noc in top_nocs:
+            all_wages[noc["code"]] = fetch_jobbank_wages(noc["code"], geo)
+
+    has_data = any(w.get("wages") for w in all_wages.values())
+    if not has_data:
+        st.warning("Could not retrieve wage data from Job Bank for these occupations.")
+        return
+
+    # ── Wage Comparison Table ─────────────────────────────────
+    st.header("Wage Comparison ($/hour)")
+    st.caption(f"Hourly wages for the top occupations in **{geo}**.")
+
+    # Build HTML table
+    n_nocs = len(top_nocs)
+    col_defs = (
+        "<colgroup>"
+        "<col style='width:200px;'/>"
+        + "".join(f"<col style='width:{max(100, 500 // n_nocs)}px;'/>" for _ in range(n_nocs))
+        + "</colgroup>"
+    )
+
+    # Header row
+    header_cells = "<th style='text-align:left; padding:8px 10px; background:#F1F5F9; " \
+                   "color:#334155; font-size:0.82rem; border-bottom:2px solid #CBD5E1;'>Occupation</th>"
+    for noc in top_nocs:
+        code = noc["code"]
+        title = all_wages[code].get("title") or noc["name"].split(" ", 1)[-1] if " " in noc["name"] else code
+        # Truncate long titles
+        if len(title) > 25:
+            title = title[:23] + "…"
+        header_cells += (
+            f"<th style='text-align:center; padding:8px 6px; background:#F1F5F9; "
+            f"color:#334155; font-size:0.78rem; border-bottom:2px solid #CBD5E1;'>"
+            f"<div style='font-weight:700;'>{code}</div>"
+            f"<div style='font-weight:400; color:#64748B; font-size:0.72rem;'>{title}</div></th>"
+        )
+
+    # Wage color helper
+    def _wage_cell(value):
+        if value is None:
+            return "<td style='text-align:center; padding:6px; color:#9CA3AF;'>—</td>"
+        return (
+            f"<td style='text-align:center; padding:6px; font-weight:600; "
+            f"font-size:0.88rem; color:#1E293B;'>${value:.2f}</td>"
+        )
+
+    rows_html = ""
+    for label, key in [("Low", "low"), ("Median", "median"), ("High", "high")]:
+        # Row background colors
+        if key == "low":
+            bg = "#FEF2F2"
+            label_color = "#9CA3AF"
+        elif key == "median":
+            bg = "#F0FDF4"
+            label_color = "#16A34A"
+        else:
+            bg = "#EFF6FF"
+            label_color = "#2563EB"
+
+        row = (
+            f"<tr style='background:{bg};'>"
+            f"<td style='padding:8px 10px; font-weight:600; font-size:0.85rem; "
+            f"color:{label_color};'>{label}</td>"
+        )
+        for noc in top_nocs:
+            wages = all_wages[noc["code"]].get("wages", {})
+            row += _wage_cell(wages.get(key))
+        row += "</tr>"
+        rows_html += row
+
+    # Annual estimate row (median × 2080 hours)
+    annual_row = (
+        "<tr style='background:#FFF7ED; border-top:2px solid #CBD5E1;'>"
+        "<td style='padding:8px 10px; font-weight:600; font-size:0.85rem; "
+        "color:#EA580C;'>Est. Annual<br/><span style=\"font-size:0.7rem; font-weight:400; "
+        "color:#94A3B8;\">(Median × 2,080 hrs)</span></td>"
+    )
+    for noc in top_nocs:
+        wages = all_wages[noc["code"]].get("wages", {})
+        med = wages.get("median")
+        if med is not None:
+            annual = med * 2080
+            annual_row += (
+                f"<td style='text-align:center; padding:6px; font-weight:700; "
+                f"font-size:0.88rem; color:#EA580C;'>${annual:,.0f}</td>"
+            )
+        else:
+            annual_row += "<td style='text-align:center; padding:6px; color:#9CA3AF;'>—</td>"
+    annual_row += "</tr>"
+    rows_html += annual_row
+
+    table_html = (
+        f"<table style='width:100%; border-collapse:collapse; table-layout:fixed; "
+        f"border:1px solid #E2E8F0; border-radius:8px; overflow:hidden;'>"
+        f"{col_defs}"
+        f"<thead><tr>{header_cells}</tr></thead>"
+        f"<tbody>{rows_html}</tbody></table>"
+    )
+    st.markdown(table_html, unsafe_allow_html=True)
+
+    # ── Community Breakdown (expandable) ──────────────────────
+    # Show community breakdown for each NOC if available
+    has_community = any(all_wages[n["code"]].get("community") for n in top_nocs)
+    if has_community:
+        st.divider()
+        st.subheader("Regional Wage Breakdown")
+        st.caption("Detailed wage data by community/region within the selected province.")
+
+        for noc in top_nocs:
+            community = all_wages[noc["code"]].get("community", [])
+            if not community:
+                continue
+            with st.expander(f"{noc['name']}", expanded=False):
+                comm_rows = ""
+                for c in community:
+                    comm_rows += (
+                        f"<tr>"
+                        f"<td style='padding:5px 8px; font-size:0.82rem; color:#334155;'>{c['area']}</td>"
+                        f"<td style='text-align:center; padding:5px; font-size:0.82rem;'>${c['low']:.2f}</td>"
+                        f"<td style='text-align:center; padding:5px; font-size:0.82rem; "
+                        f"font-weight:600; color:#16A34A;'>${c['median']:.2f}</td>"
+                        f"<td style='text-align:center; padding:5px; font-size:0.82rem;'>${c['high']:.2f}</td>"
+                        f"</tr>"
+                    )
+                comm_table = (
+                    "<table style='width:100%; border-collapse:collapse;'>"
+                    "<thead><tr>"
+                    "<th style='text-align:left; padding:5px 8px; font-size:0.78rem; "
+                    "background:#F1F5F9; color:#64748B;'>Community</th>"
+                    "<th style='text-align:center; padding:5px; font-size:0.78rem; "
+                    "background:#F1F5F9; color:#64748B;'>Low</th>"
+                    "<th style='text-align:center; padding:5px; font-size:0.78rem; "
+                    "background:#F1F5F9; color:#64748B;'>Median</th>"
+                    "<th style='text-align:center; padding:5px; font-size:0.78rem; "
+                    "background:#F1F5F9; color:#64748B;'>High</th>"
+                    "</tr></thead>"
+                    f"<tbody>{comm_rows}</tbody></table>"
+                )
+                st.markdown(comm_table, unsafe_allow_html=True)
+
+    # ── Quadrant Bubble Chart ─────────────────────────────────
+    st.divider()
+    st.header("Occupation Quadrant — Employment Count vs Income")
+    st.caption(
+        "Each bubble represents a specific occupation (5-digit NOC). "
+        "X-axis: employment count (more people → further right). "
+        "Y-axis: median income for age 25-64 (higher → more income). "
+        "Bubble size: employment share (larger bubble = higher proportion of graduates)."
+    )
+
+    # Re-fetch NOC distribution for the quadrant chart
+    noc_result = None
+    try:
+        with st.spinner("Querying occupation data for quadrant chart..."):
+            noc_result = fetch_noc_distribution(cip_code, broad_field, education)
+    except Exception:
+        pass
+
+    if noc_result and noc_result.get("detail_distribution"):
+        try:
+            with st.spinner("Querying income data for occupation quadrant..."):
+                quadrant_data = fetch_noc_income_for_quadrant(
+                    noc_result["detail_distribution"],
+                    cip_code,
+                    broad_field,
+                    education,
+                )
+            if quadrant_data:
+                # Mark the top 5 NOCs with a distinct color
+                top_codes = {n["code"] for n in top_nocs}
+                st.plotly_chart(
+                    noc_quadrant_bubble(
+                        quadrant_data,
+                        oasis_noc_set=top_codes,
+                        highlight_label="Your Top 5 Occupations",
+                    ),
+                    use_container_width=True,
+                )
+
+                # Compact quadrant legend
+                q1, q2, q3, q4 = st.columns(4)
+                q1.markdown(
+                    '<span style="color:#10B981;font-size:1.2rem;">&#9679;</span> '
+                    '<span style="font-size:0.82rem;">Many + High Pay</span>',
+                    unsafe_allow_html=True,
+                )
+                q2.markdown(
+                    '<span style="color:#6366F1;font-size:1.2rem;">&#9679;</span> '
+                    '<span style="font-size:0.82rem;">Few + High Pay</span>',
+                    unsafe_allow_html=True,
+                )
+                q3.markdown(
+                    '<span style="color:#F59E0B;font-size:1.2rem;">&#9679;</span> '
+                    '<span style="font-size:0.82rem;">Many + Lower Pay</span>',
+                    unsafe_allow_html=True,
+                )
+                q4.markdown(
+                    '<span style="color:#F43F5E;font-size:1.2rem;">&#9679;</span> '
+                    '<span style="font-size:0.82rem;">Few + Lower Pay</span>',
+                    unsafe_allow_html=True,
+                )
+                st.caption("Bubble size = share of graduates. Blue bubbles = your top 5 occupations.")
+            else:
+                st.info("Could not retrieve income data for the occupation quadrant chart.")
+        except Exception as e:
+            st.error(f"Error loading quadrant data: {e}")
+            st.code(traceback.format_exc())
+    else:
+        st.info("Occupation distribution data not available for the quadrant chart.")
+
+
 # ── Router ────────────────────────────────────────────────────────
 
 
-def main():
+def main(default_page: str = "profile"):
     if "wizard_page" not in st.session_state:
-        st.session_state["wizard_page"] = "profile"
+        st.session_state["wizard_page"] = default_page
 
     page = st.session_state["wizard_page"]
     if page == "deep_analysis":
         render_deep_analysis_page()
     elif page == "cip_distribution":
         render_cip_distribution_page()
+    elif page == "ce_analysis":
+        render_ce_analysis_page()
+    elif page == "ce_job_analysis":
+        render_ce_job_analysis_page()
+    elif page == "ce_skills":
+        render_ce_skills_page()
+    elif page == "ce_wages":
+        render_ce_wages_page()
     elif page == "analysis":
         render_analysis_page()
+    elif page == "career_exploration":
+        render_career_exploration_page()
     else:
         render_profile_page()
 
